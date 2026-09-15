@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build Phosphor.app. macOS application bundles are just a directory with a
-# plist, so we make one directly rather than depend on a packaging tool.
+# Build "Lone Typist.app". macOS application bundles are just a directory
+# with a plist, so we make one directly rather than depend on a packaging tool.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -8,18 +8,18 @@ cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
 VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
-APP="target/Phosphor.app"
+APP="target/Lone Typist.app"
 
 # release.sh points this at a universal binary; by default build native.
-BIN=${PHOSPHOR_BIN:-target/release/phosphor}
-if [ "$BIN" = "target/release/phosphor" ]; then
+BIN=${LONETYPIST_BIN:-target/release/lonetypist}
+if [ "$BIN" = "target/release/lonetypist" ]; then
     echo "==> building release binary"
     cargo build --release
 fi
 
 echo "==> rendering icon"
 python3 tools/make-icon.py target/icon.bmp
-ICONSET=target/phosphor.iconset
+ICONSET=target/lonetypist.iconset
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"
 sips -s format png target/icon.bmp --out target/icon.png >/dev/null
 for size in 16 32 64 128 256 512 1024; do
@@ -29,26 +29,26 @@ done
 for size in 16 32 128 256 512; do
     cp "$ICONSET/icon_$((size*2))x$((size*2)).png" "$ICONSET/icon_${size}x${size}@2x.png"
 done
-iconutil -c icns "$ICONSET" -o target/phosphor.icns
+iconutil -c icns "$ICONSET" -o target/lonetypist.icns
 
 echo "==> assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/phosphor"
-cp target/phosphor.icns "$APP/Contents/Resources/phosphor.icns"
+cp "$BIN" "$APP/Contents/MacOS/lonetypist"
+cp target/lonetypist.icns "$APP/Contents/Resources/lonetypist.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>              <string>Phosphor</string>
-    <key>CFBundleDisplayName</key>       <string>phosphor</string>
-    <key>CFBundleIdentifier</key>        <string>com.craftedup.phosphor</string>
+    <key>CFBundleName</key>              <string>Lone Typist</string>
+    <key>CFBundleDisplayName</key>       <string>Lone Typist</string>
+    <key>CFBundleIdentifier</key>        <string>com.craftedup.lonetypist</string>
     <key>CFBundleVersion</key>           <string>$VERSION</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleExecutable</key>        <string>phosphor</string>
-    <key>CFBundleIconFile</key>          <string>phosphor</string>
+    <key>CFBundleExecutable</key>        <string>lonetypist</string>
+    <key>CFBundleIconFile</key>          <string>lonetypist</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>LSMinimumSystemVersion</key>    <string>11.0</string>
     <key>NSHighResolutionCapable</key>   <true/>

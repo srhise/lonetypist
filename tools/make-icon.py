@@ -15,9 +15,10 @@ def glyph_rows(ch):
 
 px = [[BLUE] * SIZE for _ in range(SIZE)]
 
-# "ph" plus a block cursor, three cells wide, scaled to fill the icon.
+# "LT" plus a block cursor, three cells wide, scaled to fill the icon.
 # The full name would be mush at 16x16, so the icon keeps the prompt short.
-text = "ph"
+# Uppercase, because the ROM's lowercase l is indistinguishable from a 1.
+text = "LT"
 cells = len(text) + 1
 scale = SIZE * 82 // 100 // (cells * 8)       # leave a margin
 cw, chh = 8 * scale, 16 * scale

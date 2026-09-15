@@ -1,4 +1,4 @@
-# phosphor
+# Lone Typist
 
 A distraction-free writing app that emulates VGA text mode.
 
@@ -7,9 +7,8 @@ real 80×25 grid of character cells, blits them from the IBM VGA ROM font
 into a 720×400 framebuffer, and passes that through a CRT shader. It is a
 DOS screen because it is built like one.
 
-The name is the coating on the inside of a cathode-ray tube. The
-electron beam excites it and it keeps glowing after the beam has moved
-on, which is why those screens smeared instead of merely displaying.
+The name is for whoever is still up past midnight with one lamp on,
+typing the report nobody else is going to believe.
 
 Inspired by WordPerfect 6.0 for DOS.
 
@@ -27,11 +26,11 @@ C:\USERS\SRHISE\DOCUMENTS\CHAPTER-ONE.TXT *   Doc 1   Pg 1   Ln 2"   Pos 6.3"
 ## Install
 
 macOS 11+, Apple Silicon and Intel. Download the DMG from the
-[latest release](https://github.com/srhise/phosphor/releases/latest),
+[latest release](https://github.com/srhise/lonetypist/releases/latest),
 or:
 
 ```sh
-brew install --cask srhise/tap/phosphor
+brew install --cask srhise/tap/lone-typist
 ```
 
 ## Build
@@ -40,8 +39,8 @@ Needs a Rust toolchain. Nothing else.
 
 ```sh
 cargo run                 # run it
-cargo test                # 268 tests, all headless
-./tools/package.sh        # build target/Phosphor.app
+cargo test                # 272 tests, all headless
+./tools/package.sh        # build "target/Lone Typist.app"
 ./tools/release.sh        # sign, notarize, draft a GitHub release
 ```
 
@@ -178,7 +177,7 @@ Line endings are the exception: CRLF files stay CRLF files.
 Every 30 seconds a modified document is copied to:
 
 ```
-~/Library/Application Support/phosphor/backup/
+~/Library/Application Support/lonetypist/backup/
 ```
 
 This never overwrites your own file — it mirrors WordPerfect's timed

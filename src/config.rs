@@ -3,7 +3,7 @@
 //! preferences file on the way into a writing app.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -32,8 +32,33 @@ impl Default for Config {
     }
 }
 
+const DIR_NAME: &str = "lonetypist";
+const OLD_DIR_NAME: &str = "phosphor";
+
+/// `~/Library/Application Support/lonetypist`: settings, backups and the
+/// crash log.
+pub fn app_dir() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join(DIR_NAME))
+}
+
+/// Carry the folder from the app's previous name across, so a pending
+/// backup is still offered for recovery.
+pub fn migrate_old_dir() {
+    if let Some(root) = dirs::data_dir() {
+        migrate_in(&root);
+    }
+}
+
+fn migrate_in(root: &Path) {
+    let old = root.join(OLD_DIR_NAME);
+    let new = root.join(DIR_NAME);
+    if old.is_dir() && !new.exists() {
+        let _ = fs::rename(old, new);
+    }
+}
+
 fn path() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("phosphor").join("config.toml"))
+    app_dir().map(|d| d.join("config.toml"))
 }
 
 pub fn parse(text: &str) -> Config {
@@ -99,6 +124,46 @@ mod tests {
         let c = parse("effects = false\nfuture_option = 42\n");
         assert!(!c.effects);
         assert!(!c.dense, "the rest stay at their defaults");
+    }
+
+    #[test]
+    fn the_old_folder_moves_to_the_new_name() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join(OLD_DIR_NAME).join("backup")).expect("mkdir");
+        fs::write(root.path().join(OLD_DIR_NAME).join("config.toml"), "dense = true\n")
+            .expect("write");
+
+        migrate_in(root.path());
+
+        assert!(!root.path().join(OLD_DIR_NAME).exists());
+        assert!(root.path().join(DIR_NAME).join("backup").is_dir());
+        assert_eq!(
+            fs::read_to_string(root.path().join(DIR_NAME).join("config.toml")).expect("read"),
+            "dense = true\n"
+        );
+    }
+
+    #[test]
+    fn an_existing_new_folder_is_never_overwritten() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join(OLD_DIR_NAME)).expect("mkdir");
+        fs::create_dir_all(root.path().join(DIR_NAME)).expect("mkdir");
+        fs::write(root.path().join(DIR_NAME).join("config.toml"), "new").expect("write");
+
+        migrate_in(root.path());
+
+        assert!(root.path().join(OLD_DIR_NAME).is_dir(), "old folder left alone");
+        assert_eq!(
+            fs::read_to_string(root.path().join(DIR_NAME).join("config.toml")).expect("read"),
+            "new"
+        );
+    }
+
+    #[test]
+    fn nothing_to_migrate_is_not_an_error() {
+        let root = tempfile::tempdir().expect("tempdir");
+        migrate_in(root.path());
+        assert!(!root.path().join(DIR_NAME).exists());
     }
 
     #[test]

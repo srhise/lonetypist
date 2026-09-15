@@ -570,7 +570,7 @@ impl ApplicationHandler for Shell {
 
         let (cw, ch) = self.config.window;
         let attrs = Window::default_attributes()
-            .with_title("phosphor")
+            .with_title("Lone Typist")
             .with_inner_size(LogicalSize::new(cw.max(640) as f64, ch.max(480) as f64))
             .with_min_inner_size(LogicalSize::new(640.0, 480.0));
 
@@ -728,20 +728,20 @@ fn install_panic_logger() {
     std::panic::set_hook(Box::new(move |info| {
         // A panic here aborts, and the abort panics again on the way out.
         // Only the first one explains anything, so never overwrite it.
-        if let Some(dir) = dirs::data_dir() {
-            let dir = dir.join("phosphor");
+        if let Some(dir) = config::app_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let log = dir.join("crash.log");
             if !log.exists() {
                 let _ = std::fs::write(&log, format!("{info}\n"));
             }
         }
-        eprintln!("phosphor panicked: {info}");
+        eprintln!("lonetypist panicked: {info}");
         default(info);
     }));
 }
 
 fn main() {
+    config::migrate_old_dir();
     install_panic_logger();
 
     let event_loop = match EventLoop::new() {

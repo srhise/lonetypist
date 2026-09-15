@@ -44,6 +44,8 @@ pub enum Command {
     Quit,
     /// In-world open: type a name rather than browsing.
     Retrieve,
+    /// The Shift-F7 print screen.
+    Print,
     /// Drop the Alt-= menu bar.
     MenuBar,
     ToggleHelp,
@@ -81,6 +83,7 @@ pub fn resolve(event: &KeyEvent, mods: &Modifiers) -> Option<Command> {
                 "s" => Some(Command::Save),
                 "o" => Some(Command::Open),
                 "n" => Some(Command::New),
+                "p" => Some(Command::Print),
                 "q" => Some(Command::Quit),
                 _ => None,
             };
@@ -121,7 +124,9 @@ pub fn resolve(event: &KeyEvent, mods: &Modifiers) -> Option<Command> {
         // the Help menu, so neither is the only way in.
         Key::Named(NamedKey::F1) if shift => Some(Command::ToggleHelp),
         Key::Named(NamedKey::F1) => Some(Command::MenuBar),
-        // WordPerfect's own: F7 leaves, F10 saves, Shift-F10 retrieves.
+        // WordPerfect's own: F7 leaves, Shift-F7 prints, F10 saves,
+        // Shift-F10 retrieves.
+        Key::Named(NamedKey::F7) if shift => Some(Command::Print),
         Key::Named(NamedKey::F7) => Some(Command::Quit),
         Key::Named(NamedKey::F10) if shift => Some(Command::Retrieve),
         Key::Named(NamedKey::F10) => Some(Command::SaveAs),

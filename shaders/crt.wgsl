@@ -1,5 +1,10 @@
 // Presents the 720x400 VGA framebuffer at a 4:3 aspect ratio.
-// Scanlines, bloom, curvature, and vignette arrive in Task 15.
+//
+// The quad covers the whole surface. Where the surface is wider or
+// taller than 4:3, the picture is letterboxed inside it and the slack
+// is painted in the screen's own background colour, with the same
+// scanlines and vignette running across it, so the blue field reads as
+// one continuous surface rather than a picture inside a black bezel.
 
 struct Uniforms {
     // Clip-space scale that letterboxes the 4:3 image inside the surface.
@@ -10,6 +15,9 @@ struct Uniforms {
     // 0.0 = plain, 1.0 = CRT effects.
     effects: f32,
     _pad: vec2<f32>,
+    // Colour of the slack around the picture, in the texture's colour
+    // space (linear, since the framebuffer is sRGB-decoded on sample).
+    border: vec4<f32>,
 };
 
 const TEX_SIZE: vec2<f32> = vec2<f32>(720.0, 400.0);
@@ -46,24 +54,27 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    // A triangle strip covering the quad, scaled to preserve 4:3.
+    // A triangle strip covering the whole surface. The 4:3 picture is
+    // the [0,1] square of uv space; the letterbox scale pushes the
+    // surface edges out past it, and those pixels get the border.
     var positions = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>( 1.0, -1.0),
         vec2<f32>(-1.0,  1.0),
         vec2<f32>( 1.0,  1.0),
     );
-    var uvs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
-    );
 
     var out: VertexOutput;
-    out.clip = vec4<f32>(positions[index] * u.scale, 0.0, 1.0);
-    out.uv = uvs[index];
+    let p = positions[index];
+    out.clip = vec4<f32>(p, 0.0, 1.0);
+    let q = p / u.scale;
+    out.uv = vec2<f32>((q.x + 1.0) * 0.5, (1.0 - q.y) * 0.5);
     return out;
+}
+
+// Whether a uv lands on the picture rather than the slack around it.
+fn on_picture(uv: vec2<f32>) -> bool {
+    return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
 }
 
 // Source framebuffer is 720x400; scanlines run at that row frequency.
@@ -87,20 +98,24 @@ fn barrel(uv: vec2<f32>) -> vec2<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Sampling stays in uniform control flow (it needs derivatives), so
+    // the slack is always sampled at the clamped edge and then replaced.
+    let inside = on_picture(in.uv);
+    let border = u.border.rgb;
+
     if (u.effects < 0.5) {
-        return textureSample(tex, samp, sharp_uv(in.uv));
+        let picture = textureSample(tex, samp, sharp_uv(in.uv)).rgb;
+        return vec4<f32>(select(border, picture, inside), 1.0);
     }
 
     var uv = in.uv;
     if (CURVATURE > 0.0) {
         uv = barrel(in.uv);
-        // Past the edge of a curved tube there is no picture.
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-        }
     }
+    // Past the edge of a curved tube there is no picture either.
+    let lit = inside && on_picture(uv);
 
-    var color = textureSample(tex, samp, sharp_uv(uv)).rgb;
+    var color = select(border, textureSample(tex, samp, sharp_uv(uv)).rgb, lit);
 
     // Phosphor bloom: bright text spills into the dark around it.
     //
@@ -116,7 +131,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     glow = glow + textureSample(tex, samp, uv + vec2<f32>( BLOOM_RADIUS,  BLOOM_RADIUS)).rgb;
     glow = glow + textureSample(tex, samp, uv + vec2<f32>(-BLOOM_RADIUS, -BLOOM_RADIUS)).rgb;
     let excess = max(glow / 6.0 - color, vec3<f32>(0.0));
-    color = color + excess * BLOOM_STRENGTH;
+    // The slack has no glyphs to glow, and must not borrow the picture's
+    // edge column.
+    color = color + excess * BLOOM_STRENGTH * select(0.0, 1.0, lit);
 
     // Scanlines at the source row frequency.
     let scan = 1.0 - SCANLINE_DEPTH * pow(sin(uv.y * SOURCE_HEIGHT * 3.14159265), 2.0);

@@ -6,7 +6,7 @@ use std::path::Path;
 
 const LINES_PER_INCH: f32 = 6.0;
 const CHARS_PER_INCH: f32 = 10.0;
-const LINES_PER_PAGE: usize = 54;
+pub const LINES_PER_PAGE: usize = 54;
 const MARGIN_INCHES: f32 = 1.0;
 
 /// How much of the status line the path may occupy before truncation.

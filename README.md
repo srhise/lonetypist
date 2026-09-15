@@ -40,7 +40,7 @@ Needs a Rust toolchain. Nothing else.
 
 ```sh
 cargo run                 # run it
-cargo test                # 247 tests, all headless
+cargo test                # 268 tests, all headless
 ./tools/package.sh        # build target/Phosphor.app
 ./tools/release.sh        # sign, notarize, draft a GitHub release
 ```
@@ -63,6 +63,8 @@ teaches the shortcuts and then you stop needing it.
 │ Save As...             F10 │
 │ New                  Cmd-N │
 ├────────────────────────────┤
+│ Print...           Shft-F7 │
+├────────────────────────────┤
 │ Exit                    F7 │
 └────────────────────────────┘
 ```
@@ -82,6 +84,34 @@ only sets the destination — the file appears on the first save.
 `Cmd-O` keeps the native macOS panel, because typing a path is a poor
 way to *browse*.
 
+## Printing
+
+`Shift-F7` (or `Cmd-P`) takes over the screen the way WordPerfect's
+print menu did:
+
+```
+Print
+
+     1 - Full Document
+     2 - Page
+     3 - Document to Disk
+
+Options
+
+     Printer               HP_LaserJet
+     Pages                 3   (cursor on page 2)
+
+
+
+Selection: 0
+```
+
+The job is plain text at 10 characters and 6 lines to the inch with a
+one-inch margin all round and a form feed between pages -- the same
+geometry the status line reports, so `Pg 3` on screen is page 3 on
+paper. It goes to the system default printer through `lpr`. `3` writes
+exactly what the printer would have received to a `.prn` file instead.
+
 ## Keys
 
 DOS look, modern muscle memory.
@@ -93,6 +123,7 @@ DOS look, modern muscle memory.
 | `Cmd-N` / `Cmd-O` / `Cmd-S` | New, browse-open, save |
 | `F10` / `Shift-F10` | Save As, Retrieve (typed name) |
 | `F7` | Exit |
+| `Shift-F7` / `Cmd-P` | Print |
 | `Cmd-Z` / `Cmd-Shift-Z` | Undo, redo — one word at a time |
 | `Cmd-A` / `Cmd-C` / `Cmd-X` / `Cmd-V` | Select all, copy, cut, paste |
 | `Opt-Arrow` | Move by word |

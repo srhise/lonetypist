@@ -41,6 +41,8 @@ static FILE_ITEMS: &[Item] = &[
     item("Save As...", "F10", Command::SaveAs),
     item("New", "Cmd-N", Command::New),
     sep(),
+    item("Print...", "Shft-F7", Command::Print),
+    sep(),
     item("Exit", "F7", Command::Quit),
 ];
 

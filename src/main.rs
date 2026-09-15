@@ -10,6 +10,7 @@ mod keymap;
 mod menu;
 mod overlay;
 mod present;
+mod print;
 #[cfg(test)]
 mod simulate;
 mod status;
@@ -31,6 +32,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 use input::Purpose;
 use keymap::Command;
 use overlay::{Overlay, Prompt};
+use print::{Request, Scope};
 use vga::{FB_HEIGHT, FB_WIDTH};
 
 /// VGA text mode was shown on a 4:3 monitor; the same letterboxing the
@@ -249,6 +251,16 @@ impl Shell {
                     danger: true,
                 }),
             },
+            Purpose::PrintToFile => match self.state.print_job(Scope::Full) {
+                Some(job) => match std::fs::write(&path, job) {
+                    Ok(()) => {
+                        let shown = status::dos_path(Some(&path), false);
+                        self.state.notify(&format!("Printed to {shown}"));
+                    }
+                    Err(e) => self.error("Cannot print to disk", &e.to_string()),
+                },
+                None => self.error("Print", "Nothing to print."),
+            },
             Purpose::SaveAs | Purpose::CreateAtLaunch => {
                 // Naming at launch only sets the destination; the file
                 // appears on the first save, as WordPerfect did.
@@ -262,6 +274,108 @@ impl Shell {
 
     fn do_new(&mut self) {
         self.state = app::App::new();
+    }
+
+    fn error(&mut self, title: &str, body: &str) {
+        self.state.set_overlay(Overlay::Message {
+            title: title.to_string(),
+            body: body.to_string(),
+            danger: true,
+        });
+    }
+
+    /// The system's default printer, by asking CUPS the way the era
+    /// would have looked at LPT1: `lpstat -d` prints
+    /// "system default destination: NAME", or "no system default
+    /// destination" when there is none.
+    fn default_printer() -> Option<String> {
+        let out = std::process::Command::new("lpstat")
+            .arg("-d")
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let name = text.trim().rsplit(':').next()?.trim();
+        if name.is_empty() || text.contains("no system default") {
+            return None;
+        }
+        Some(name.to_string())
+    }
+
+    fn do_print_screen(&mut self) {
+        let printer = Self::default_printer();
+        self.state.open_print(printer);
+    }
+
+    /// The name a printed-to-disk job gets: the document's name with a
+    /// .PRN extension, or UNTITLED.PRN.
+    fn prn_name(&self) -> String {
+        self.state
+            .path()
+            .and_then(|p| p.file_stem())
+            .map(|n| format!("{}.prn", n.to_string_lossy()))
+            .unwrap_or_else(|| "untitled.prn".to_string())
+    }
+
+    /// Carry out what the print screen asked for. A printer job goes
+    /// through `lpr` as plain text at 10 cpi and 6 lpi, which is what
+    /// the page geometry assumes.
+    fn do_print(&mut self, request: Request) {
+        use std::io::Write;
+        use std::process::{Command as Proc, Stdio};
+
+        let scope = match request {
+            Request::ToFile(_) => {
+                let seed = self.prn_name();
+                self.state
+                    .open_field(Purpose::PrintToFile, "Document to Disk", "Filename:", &seed);
+                return;
+            }
+            Request::Printer(scope) => scope,
+        };
+        let Some(job) = self.state.print_job(scope) else {
+            self.error("Print", "Nothing to print.");
+            return;
+        };
+        let pages = match scope {
+            Scope::Full => self.state.page_count(),
+            Scope::Page(_) => 1,
+        };
+        let title = self.prn_name().trim_end_matches(".prn").to_string();
+
+        let spawned = Proc::new("lpr")
+            .args(["-o", "cpi=10", "-o", "lpi=6", "-T", &title])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                self.error("Cannot print", &format!("lpr: {e}"));
+                return;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(job.as_bytes());
+        }
+        match child.wait_with_output() {
+            Ok(out) if out.status.success() => {
+                let printer = Self::default_printer().unwrap_or_else(|| "printer".to_string());
+                let plural = if pages == 1 { "page" } else { "pages" };
+                self.state
+                    .notify(&format!("Sent {pages} {plural} to {printer}"));
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let err = if err.is_empty() {
+                    "lpr failed".to_string()
+                } else {
+                    err
+                };
+                self.error("Cannot print", &err);
+            }
+            Err(e) => self.error("Cannot print", &format!("lpr: {e}")),
+        }
     }
 
     /// Y or N on an open confirmation. Returns whether it was consumed.
@@ -386,10 +500,24 @@ impl Shell {
                 self.request_redraw();
                 return;
             }
+            Command::Print => {
+                self.do_print_screen();
+                self.request_redraw();
+                return;
+            }
             other => other,
         };
 
         self.state.apply(cmd, now);
+        // A menu item may have fired one of the commands above, which
+        // the app cannot perform itself.
+        if let Some(fired) = self.state.take_deferred() {
+            self.dispatch(fired, event_loop);
+            return;
+        }
+        if let Some(request) = self.state.take_print_request() {
+            self.do_print(request);
+        }
         if let Some((purpose, value)) = self.state.take_submitted() {
             self.act_on_field(purpose, &value);
         }
@@ -420,6 +548,7 @@ impl Shell {
             surface: (size.width, size.height),
             time: elapsed as f32 / 1000.0,
             effects: self.state.effects(),
+            border: vga::PALETTE[app::BG as usize],
         };
         if let Err(e) = pixels.render_with(|encoder, target, context| {
             present.render(encoder, target, context, &params);

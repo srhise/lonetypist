@@ -10,13 +10,16 @@ use crate::input::{Input, Purpose};
 use crate::keymap::{Command, Motion};
 use crate::menu::{self, MenuState};
 use crate::overlay::{self, Overlay, Prompt};
+use crate::print::{self, Request, Scope};
 use crate::status;
 use crate::vga::{Mode, Screen};
 use crate::wrap::{self, VisualLine};
 
 /// Body text and status line colours (Global Constraints).
 const FG: u8 = 7;
-const BG: u8 = 1;
+/// The screen's background. The shell also paints the letterbox slack
+/// around the picture in it, so the blue runs to the window's edge.
+pub const BG: u8 = 1;
 const STATUS_FG: u8 = 15;
 /// Columns of clearance at each end of the status line.
 const STATUS_MARGIN: usize = 2;
@@ -37,13 +40,14 @@ Cmd-N  New            Cmd-Z  Undo
 Cmd-O  Open           Cmd-Shift-Z  Redo
 Cmd-S  Save           Cmd-A  Select all
 Cmd-Shift-S  Save as  Cmd-C / X / V  Copy, cut, paste
-Cmd-Q  Quit
+Cmd-Q  Quit           Cmd-P  Print
 
 Opt-Arrow  By word    Cmd-Arrow  Line or document
 F3  CRT effects       F5  80x25 / 80x50
 F6  Word count        F11  Fullscreen
 F7  Exit              F10  Save As
-Shft-F10  Retrieve    Shft-F1  This help
+Shft-F7  Print        Shft-F10  Retrieve
+Shft-F1  This help
 
 Esc  Close this";
 
@@ -70,6 +74,12 @@ pub struct App {
     /// A value the user entered in a modal, waiting for the shell to act
     /// on it -- naming, saving, and retrieving all touch the filesystem.
     submitted: Option<(Purpose, String)>,
+    /// A command the menu fired that only the shell can carry out.
+    deferred: Option<Command>,
+    /// What the print screen asked for, waiting for the shell.
+    print_request: Option<Request>,
+    /// A short readout that borrows the status line's right field.
+    notice: Option<(String, u64)>,
     /// CRT effects and fullscreen live here so the shell can read them
     /// back; both persist to the config file.
     effects: bool,
@@ -94,6 +104,9 @@ impl App {
             overlay: Overlay::None,
             word_count_until: 0,
             submitted: None,
+            deferred: None,
+            print_request: None,
+            notice: None,
             effects: true,
             fullscreen: false,
             should_quit: false,
@@ -132,7 +145,7 @@ impl App {
 
     /// Rows of the grid available for text: everything but the status line.
     pub fn text_rows(&self) -> usize {
-        self.screen.rows() - 1
+        self.screen.rows() - 1 - wrap::TEXT_TOP
     }
 
     /// Replace the document, as when opening a file.
@@ -278,6 +291,60 @@ impl App {
         self.submitted.take()
     }
 
+    /// A menu item can fire a command the shell owns -- Save, Open,
+    /// Copy -- which `apply` cannot perform. It is parked here for the
+    /// shell to pick up after every `apply`.
+    pub fn take_deferred(&mut self) -> Option<Command> {
+        self.deferred.take()
+    }
+
+    pub fn take_print_request(&mut self) -> Option<Request> {
+        self.print_request.take()
+    }
+
+    /// Show `text` in the status line's right field for three seconds.
+    pub fn notify(&mut self, text: &str) {
+        self.notice = Some((text.to_string(), self.now_ms + 3_000));
+    }
+
+    /// The print screen. The shell passes the printer, since asking the
+    /// system for it is its job.
+    pub fn open_print(&mut self, printer: Option<String>) {
+        self.overlay = Overlay::Print { printer };
+    }
+
+    pub fn page_count(&self) -> usize {
+        print::page_count(&self.lines)
+    }
+
+    /// The print job text for `scope`, or `None` if there is nothing to
+    /// print or no such page.
+    pub fn print_job(&self, scope: Scope) -> Option<String> {
+        if self.editor.to_string().trim().is_empty() {
+            return None;
+        }
+        print::job(self.editor.text(), &self.lines, scope)
+    }
+
+    /// Keys reaching the print screen: a digit picks, 0 or Esc leaves.
+    fn print_key(&mut self, cmd: Command) {
+        let choice = match cmd {
+            Command::Insert(text) => text.chars().next(),
+            Command::Dismiss | Command::Newline => Some('0'),
+            _ => None,
+        };
+        let (line, _) = self.cursor_position();
+        let page = Scope::Page(print::page_of(line));
+        match choice {
+            Some('1') => self.print_request = Some(Request::Printer(Scope::Full)),
+            Some('2') => self.print_request = Some(Request::Printer(page)),
+            Some('3') => self.print_request = Some(Request::ToFile(Scope::Full)),
+            Some('0') => {}
+            _ => return,
+        }
+        self.overlay = Overlay::None;
+    }
+
     pub fn open_menu(&mut self) {
         self.overlay = Overlay::Menu(MenuState::new());
     }
@@ -403,6 +470,10 @@ impl App {
                 self.field_key(cmd);
                 return;
             }
+            Overlay::Print { .. } => {
+                self.print_key(cmd);
+                return;
+            }
             Overlay::Message { .. } | Overlay::Confirm { .. } => {
                 if matches!(cmd, Command::Dismiss) {
                     self.overlay = Overlay::None;
@@ -479,7 +550,9 @@ impl App {
             }
             Command::ToggleEffects => self.effects = !self.effects,
             Command::ToggleFullscreen => self.fullscreen = !self.fullscreen,
-            // The shell performs these: they touch the OS.
+            // The shell performs these: they touch the OS. A hotkey
+            // never gets here (the shell intercepts it first), so this
+            // is a menu item firing, and the shell collects it after.
             Command::Copy
             | Command::Cut
             | Command::Paste
@@ -487,7 +560,8 @@ impl App {
             | Command::Open
             | Command::Retrieve
             | Command::Save
-            | Command::SaveAs => {}
+            | Command::SaveAs
+            | Command::Print => self.deferred = Some(cmd),
         }
     }
 
@@ -499,7 +573,7 @@ impl App {
 
     /// The character offset under a grid cell.
     pub fn offset_at_cell(&self, col: usize, row: usize) -> usize {
-        let line = self.viewport_top + row;
+        let line = self.viewport_top + row.saturating_sub(wrap::TEXT_TOP);
         // Clicking in the empty space below the text lands at the end of
         // the document, not at the start of the last line.
         if line >= self.lines.len() {
@@ -544,7 +618,8 @@ impl App {
                 break;
             };
             let s: String = text[line.start..line.end].iter().collect();
-            self.screen.put_str(wrap::TEXT_LEFT, row, &s, FG, BG);
+            self.screen
+                .put_str(wrap::TEXT_LEFT, wrap::TEXT_TOP + row, &s, FG, BG);
         }
 
         self.paint_selection();
@@ -554,6 +629,35 @@ impl App {
         }
         self.paint_status();
         self.paint_overlay();
+    }
+
+    /// WordPerfect's Shift-F7 screen: the document goes away, the
+    /// choices sit at the top left, and "Selection: 0" waits at the
+    /// bottom with the cursor on the 0.
+    fn paint_print(&mut self, printer: Option<&str>) {
+        self.screen.clear(FG, BG);
+        let rows = self.screen.rows();
+        let (line, _) = self.cursor_position();
+        let here = print::page_of(line) + 1;
+        let pages = self.page_count();
+
+        self.screen.put_str(0, 0, "Print", FG, BG);
+        self.screen.put_str(5, 2, "1 - Full Document", FG, BG);
+        self.screen.put_str(5, 3, "2 - Page", FG, BG);
+        self.screen.put_str(5, 4, "3 - Document to Disk", FG, BG);
+
+        self.screen.put_str(0, 6, "Options", FG, BG);
+        let printer = printer.unwrap_or("(none selected)");
+        let printer_line = format!("Printer               {printer}");
+        self.screen.put_str(5, 8, &printer_line, FG, BG);
+        let pages_line = format!("Pages                 {pages}   (cursor on page {here})");
+        self.screen.put_str(5, 9, &pages_line, FG, BG);
+
+        let sel = "Selection: 0";
+        let bottom = rows - 1;
+        self.screen.put_str(0, bottom, sel, FG, BG);
+        self.screen
+            .set_cursor(Some((sel.chars().count() - 1, bottom)));
     }
 
     fn paint_overlay(&mut self) {
@@ -572,6 +676,7 @@ impl App {
             Overlay::Confirm { body, .. } => {
                 overlay::draw_centered(&mut self.screen, "", &body, 15, 1);
             }
+            Overlay::Print { printer } => self.paint_print(printer.as_deref()),
         }
     }
 
@@ -588,7 +693,7 @@ impl App {
             let to = hi.min(line.end);
             for offset in from..to {
                 let col = wrap::TEXT_LEFT + (offset - line.start);
-                self.screen.invert(col, row);
+                self.screen.invert(col, wrap::TEXT_TOP + row);
             }
         }
     }
@@ -600,7 +705,8 @@ impl App {
         }
         let row = line - self.viewport_top;
         if row < self.text_rows() {
-            self.screen.set_cursor(Some((wrap::TEXT_LEFT + col, row)));
+            self.screen
+                .set_cursor(Some((wrap::TEXT_LEFT + col, wrap::TEXT_TOP + row)));
         }
     }
 
@@ -721,7 +827,13 @@ impl App {
         self.screen
             .put_str(STATUS_MARGIN, row, &left, STATUS_FG, BG);
 
-        let right = if self.now_ms < self.word_count_until {
+        let notice = match &self.notice {
+            Some((text, until)) if self.now_ms < *until => Some(text.clone()),
+            _ => None,
+        };
+        let right = if let Some(text) = notice {
+            text
+        } else if self.now_ms < self.word_count_until {
             format!("{} words", self.editor.word_count())
         } else {
             let (line, col) = self.cursor_position();
@@ -990,12 +1102,35 @@ mod tests {
     fn painting_puts_text_at_the_left_margin() {
         let mut a = app_with("hello");
         a.paint();
-        assert_eq!(a.screen().cell(wrap::TEXT_LEFT, 0).glyph, b'h');
+        assert_eq!(a.screen().cell(wrap::TEXT_LEFT, wrap::TEXT_TOP).glyph, b'h');
         assert_eq!(
-            a.screen().cell(wrap::TEXT_LEFT - 1, 0).glyph,
+            a.screen().cell(wrap::TEXT_LEFT - 1, wrap::TEXT_TOP).glyph,
             0x20,
             "margin is blank"
         );
+    }
+
+    #[test]
+    fn painting_leaves_a_blank_row_above_the_text() {
+        let mut a = app_with("hello");
+        a.paint();
+        for col in 0..a.screen().cols() {
+            assert_eq!(a.screen().cell(col, 0).glyph, 0x20, "row 0 is margin");
+        }
+        assert_eq!(
+            a.editor().to_string(),
+            "hello",
+            "the margin is not in the buffer"
+        );
+    }
+
+    #[test]
+    fn the_menu_bar_does_not_cover_the_cursor() {
+        let mut a = App::new();
+        key(&mut a, Command::MenuBar);
+        a.paint_at(T);
+        let (_, row) = a.screen().cursor().expect("cursor still placed");
+        assert!(row > 0, "cursor sits below the bar on row 0");
     }
 
     #[test]
@@ -1009,7 +1144,10 @@ mod tests {
             T,
         );
         a.paint_at(T);
-        assert_eq!(a.screen().cursor(), Some((wrap::TEXT_LEFT + 1, 0)));
+        assert_eq!(
+            a.screen().cursor(),
+            Some((wrap::TEXT_LEFT + 1, wrap::TEXT_TOP))
+        );
     }
 
     #[test]
@@ -1106,7 +1244,7 @@ mod tests {
     fn clicking_holds_the_cursor_steady_too() {
         let mut a = app_with("hello");
         a.paint_at(9_000);
-        a.click(wrap::TEXT_LEFT + 2, 0, false);
+        a.click(wrap::TEXT_LEFT + 2, wrap::TEXT_TOP, false);
         assert!(a.cursor_visible(9_000 + 100));
     }
 
@@ -1158,8 +1296,15 @@ mod tests {
     #[test]
     fn a_click_maps_a_cell_to_a_character_offset() {
         let a = app_with("hello\nworld");
+        let top = wrap::TEXT_TOP;
+        assert_eq!(a.offset_at_cell(wrap::TEXT_LEFT + 2, top), 2);
+        assert_eq!(a.offset_at_cell(wrap::TEXT_LEFT + 3, top + 1), 9);
+    }
+
+    #[test]
+    fn a_click_in_the_top_margin_lands_on_the_first_line() {
+        let a = app_with("hello\nworld");
         assert_eq!(a.offset_at_cell(wrap::TEXT_LEFT + 2, 0), 2);
-        assert_eq!(a.offset_at_cell(wrap::TEXT_LEFT + 3, 1), 9);
     }
 
     #[test]
@@ -1171,7 +1316,7 @@ mod tests {
     #[test]
     fn a_click_past_the_end_of_a_line_lands_at_its_end() {
         let a = app_with("hi\nthere");
-        assert_eq!(a.offset_at_cell(79, 0), 2);
+        assert_eq!(a.offset_at_cell(79, wrap::TEXT_TOP), 2);
     }
 
     #[test]
@@ -1184,7 +1329,7 @@ mod tests {
     fn clicking_moves_the_caret_and_clears_the_selection() {
         let mut a = app_with("hello");
         a.apply(Command::SelectAll, T);
-        a.click(wrap::TEXT_LEFT + 2, 0, false);
+        a.click(wrap::TEXT_LEFT + 2, wrap::TEXT_TOP, false);
         assert_eq!(a.editor().cursor(), 2);
         assert_eq!(a.editor().selection(), None);
     }
@@ -1192,8 +1337,8 @@ mod tests {
     #[test]
     fn dragging_extends_the_selection() {
         let mut a = app_with("hello");
-        a.click(wrap::TEXT_LEFT + 1, 0, false);
-        a.click(wrap::TEXT_LEFT + 4, 0, true);
+        a.click(wrap::TEXT_LEFT + 1, wrap::TEXT_TOP, false);
+        a.click(wrap::TEXT_LEFT + 4, wrap::TEXT_TOP, true);
         assert_eq!(a.editor().selection(), Some((1, 4)));
     }
 
@@ -1214,7 +1359,7 @@ mod tests {
         let top = a.viewport_top();
         assert!(top > 0);
         let expected = wrap::offset_at(a.lines_for_test(), top, 0);
-        assert_eq!(a.offset_at_cell(wrap::TEXT_LEFT, 0), expected);
+        assert_eq!(a.offset_at_cell(wrap::TEXT_LEFT, wrap::TEXT_TOP), expected);
     }
 
     #[test]
@@ -1395,12 +1540,12 @@ entering along with him."
     #[test]
     fn dense_mode_doubles_the_available_rows() {
         let mut a = App::new();
-        assert_eq!(a.text_rows(), 24);
+        assert_eq!(a.text_rows(), 23);
         a.apply(Command::ToggleDenseMode, T);
-        assert_eq!(a.text_rows(), 49);
+        assert_eq!(a.text_rows(), 48);
         assert!(a.dense());
         a.apply(Command::ToggleDenseMode, T);
-        assert_eq!(a.text_rows(), 24);
+        assert_eq!(a.text_rows(), 23);
     }
 
     #[test]
@@ -1721,5 +1866,162 @@ the wall.",
             .map(|(c, r)| cp437::decode(a.screen().cell(c, r).glyph))
             .collect();
         assert!(all.contains("Menu bar"), "help should name the menu key");
+    }
+
+    #[test]
+    fn a_menu_item_the_shell_owns_is_handed_back_to_it() {
+        let mut a = App::new();
+        key(&mut a, Command::MenuBar);
+        key(&mut a, Command::Insert("f".to_string())); // File
+        key(&mut a, Command::Insert("s".to_string())); // Save
+        assert!(matches!(a.overlay(), Overlay::None), "the menu closed");
+        assert_eq!(a.take_deferred(), Some(Command::Save));
+        assert_eq!(a.take_deferred(), None, "taken once");
+    }
+
+    #[test]
+    fn a_hotkey_the_app_can_perform_is_not_deferred() {
+        let mut a = App::new();
+        let before = a.effects();
+        key(&mut a, Command::MenuBar);
+        key(&mut a, Command::Insert("v".to_string())); // View
+        key(&mut a, Command::Insert("c".to_string())); // CRT Effects
+        assert_ne!(a.effects(), before, "the toggle fired");
+        assert_eq!(a.take_deferred(), None);
+    }
+
+    #[test]
+    fn every_menu_item_either_acts_or_is_deferred() {
+        for (mi, m) in menu::MENUS.iter().enumerate() {
+            for it in m.items.iter() {
+                let Some(cmd) = it.command.clone() else {
+                    continue;
+                };
+                let mut a = app_with("some text");
+                let before = (a.effects(), a.dense(), a.fullscreen());
+                key(&mut a, cmd.clone());
+                let acted = a.take_deferred().is_some()
+                    || !matches!(a.overlay(), Overlay::None)
+                    || (a.effects(), a.dense(), a.fullscreen()) != before
+                    || a.should_quit
+                    || matches!(cmd, Command::Undo | Command::Redo | Command::SelectAll)
+                    || matches!(cmd, Command::ShowWordCount);
+                assert!(
+                    acted,
+                    "{} > {} did nothing",
+                    menu::MENUS[mi].title,
+                    it.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_print_screen_offers_full_document_page_and_disk() {
+        let mut a = app_with("hello");
+        a.open_print(Some("LPT1".to_string()));
+        a.paint();
+        let all: String = (0..a.screen().rows())
+            .flat_map(|r| (0..80).map(move |c| (c, r)))
+            .map(|(c, r)| cp437::decode(a.screen().cell(c, r).glyph))
+            .collect();
+        assert!(all.contains("1 - Full Document"), "got: {all}");
+        assert!(all.contains("2 - Page"));
+        assert!(all.contains("3 - Document to Disk"));
+        assert!(all.contains("LPT1"), "shows the printer");
+        assert!(all.contains("Selection: 0"));
+        let bottom = a.screen().rows() - 1;
+        assert_eq!(a.screen().cursor(), Some((11, bottom)), "cursor on the 0");
+    }
+
+    #[test]
+    fn choosing_one_asks_for_the_full_document() {
+        let mut a = app_with("hello");
+        a.open_print(None);
+        key(&mut a, Command::Insert("1".to_string()));
+        assert!(matches!(a.overlay(), Overlay::None));
+        assert_eq!(a.take_print_request(), Some(Request::Printer(Scope::Full)));
+    }
+
+    #[test]
+    fn choosing_two_asks_for_the_cursor_page() {
+        let text = (0..60)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut a = app_with(&text);
+        a.apply(
+            Command::Move {
+                motion: Motion::DocEnd,
+                extend: false,
+            },
+            T,
+        );
+        a.open_print(None);
+        key(&mut a, Command::Insert("2".to_string()));
+        assert_eq!(
+            a.take_print_request(),
+            Some(Request::Printer(Scope::Page(1)))
+        );
+    }
+
+    #[test]
+    fn choosing_three_prints_to_disk() {
+        let mut a = app_with("hello");
+        a.open_print(None);
+        key(&mut a, Command::Insert("3".to_string()));
+        assert_eq!(a.take_print_request(), Some(Request::ToFile(Scope::Full)));
+    }
+
+    #[test]
+    fn zero_or_escape_leaves_the_print_screen_with_no_job() {
+        for cmd in [Command::Insert("0".to_string()), Command::Dismiss] {
+            let mut a = app_with("hello");
+            a.open_print(None);
+            key(&mut a, cmd);
+            assert!(matches!(a.overlay(), Overlay::None));
+            assert_eq!(a.take_print_request(), None);
+        }
+    }
+
+    #[test]
+    fn a_stray_key_on_the_print_screen_is_ignored() {
+        let mut a = app_with("hello");
+        a.open_print(None);
+        key(&mut a, Command::Insert("x".to_string()));
+        assert!(matches!(a.overlay(), Overlay::Print { .. }), "still open");
+        assert_eq!(a.editor().to_string(), "hello", "nothing typed through");
+    }
+
+    #[test]
+    fn an_empty_document_has_no_print_job() {
+        let a = app_with("   \n\n");
+        assert_eq!(a.print_job(Scope::Full), None);
+        let a = app_with("hello");
+        assert!(a.print_job(Scope::Full).unwrap().contains("hello"));
+    }
+
+    #[test]
+    fn a_notice_borrows_the_status_line_and_then_expires() {
+        let mut a = app_with("hello");
+        a.paint_at(1_000);
+        a.notify("Sent 1 page to LPT1");
+        a.paint_at(1_500);
+        let row = a.screen().rows() - 1;
+        let line: String = (0..80)
+            .map(|c| cp437::decode(a.screen().cell(c, row).glyph))
+            .collect();
+        assert!(line.contains("Sent 1 page to LPT1"), "got: {line}");
+        a.paint_at(5_000);
+        let line: String = (0..80)
+            .map(|c| cp437::decode(a.screen().cell(c, row).glyph))
+            .collect();
+        assert!(line.contains("Pg 1"), "back to the readout: {line}");
+    }
+
+    #[test]
+    fn the_help_overlay_names_print() {
+        assert!(HELP_TEXT.contains("Shft-F7  Print"));
+        assert!(HELP_TEXT.contains("Cmd-P  Print"));
     }
 }

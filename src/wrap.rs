@@ -11,6 +11,12 @@ pub const TEXT_COLS: usize = 65;
 /// Left margin that centres the 65-column measure in the 80-column grid.
 pub const TEXT_LEFT: usize = (80 - TEXT_COLS) / 2;
 
+/// Top margin: one blank row above the text. The menu bar drops onto row
+/// 0, so without this it would land on the first line and bury the
+/// cursor. It is a property of the screen, not the document -- nothing
+/// is inserted into the buffer to make it.
+pub const TEXT_TOP: usize = 1;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct VisualLine {
     pub start: usize,

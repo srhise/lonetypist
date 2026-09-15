@@ -41,6 +41,12 @@ pub enum Overlay {
         prompt: Prompt,
         body: String,
     },
+    /// The Shift-F7 print screen. It takes the whole display, as
+    /// WordPerfect's did.
+    Print {
+        /// The default printer, or `None` when the system has none.
+        printer: Option<String>,
+    },
 }
 
 /// Draw a framed, filled box. Coordinates are the outer rectangle.

@@ -11,6 +11,8 @@ pub enum Purpose {
     CreateAtLaunch,
     SaveAs,
     Retrieve,
+    /// Where to write the print job instead of sending it to a printer.
+    PrintToFile,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -138,6 +138,60 @@ when 'profiles'
   rows(request('GET', '/v1/profiles', query: 'limit=200'),
        'id', 'profileType', 'name', 'profileState')
 
+when 'screenshot'
+  # Apple takes an asset in three steps: reserve it to learn where the
+  # bytes go, PUT them exactly as told, then confirm with a checksum of
+  # what was sent. A screenshot only counts as delivered after the third.
+  require 'digest'
+  png = ARGV.shift || die('usage: screenshot <file.png> <localization-id> [display-type]')
+  localization = ARGV.shift || die('usage: screenshot <file.png> <localization-id> [display-type]')
+  display = ARGV.shift || 'APP_DESKTOP'
+  die("no such file: #{png}") unless File.exist?(png)
+  bytes = File.binread(png)
+
+  sets = request('GET', "/v1/appStoreVersionLocalizations/#{localization}/appScreenshotSets")
+  set = Array(sets['data']).find { |s| s.dig('attributes', 'screenshotDisplayType') == display }
+  set_id = set&.dig('id')
+  if set_id.nil?
+    created = request('POST', '/v1/appScreenshotSets', body: JSON.dump(
+      data: { type: 'appScreenshotSets',
+              attributes: { screenshotDisplayType: display },
+              relationships: { appStoreVersionLocalization: { data: {
+                type: 'appStoreVersionLocalizations', id: localization } } } }
+    ))
+    set_id = created.dig('data', 'id')
+    puts "created #{display} set #{set_id}"
+  else
+    puts "using existing #{display} set #{set_id}"
+  end
+
+  reserved = request('POST', '/v1/appScreenshots', body: JSON.dump(
+    data: { type: 'appScreenshots',
+            attributes: { fileSize: bytes.bytesize, fileName: File.basename(png) },
+            relationships: { appScreenshotSet: { data: {
+              type: 'appScreenshotSets', id: set_id } } } }
+  ))
+  shot_id = reserved.dig('data', 'id')
+  operations = reserved.dig('data', 'attributes', 'uploadOperations') || []
+  die('Apple reserved the screenshot but asked for no upload') if operations.empty?
+
+  operations.each_with_index do |op, i|
+    slice = bytes.byteslice(op['offset'], op['length'])
+    uri = URI(op['url'])
+    req = Net::HTTP::Put.new(uri)
+    Array(op['requestHeaders']).each { |h| req[h['name']] = h['value'] }
+    req.body = slice
+    res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https') { |h| h.request(req) }
+    die("upload part #{i + 1} failed: HTTP #{res.code}") unless res.code.start_with?('2')
+    puts "uploaded part #{i + 1}/#{operations.size} (#{slice.bytesize} bytes)"
+  end
+
+  done = request('PATCH', "/v1/appScreenshots/#{shot_id}", body: JSON.dump(
+    data: { type: 'appScreenshots', id: shot_id,
+            attributes: { uploaded: true, sourceFileChecksum: Digest::MD5.hexdigest(bytes) } }
+  ))
+  puts "state: #{done.dig('data', 'attributes', 'assetDeliveryState', 'state')}"
+
 when 'key-json'
   # fastlane's cert, sigh and deliver all take the key this way.
   out = ARGV.shift || 'target/asc-key.json'

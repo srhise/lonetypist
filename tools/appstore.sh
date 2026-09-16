@@ -152,9 +152,28 @@ PLIST
 # Uploads are rejected if anything inside the app is quarantined.
 xattr -cr "$APP"
 
+# The signature has to carry the same application identifier the embedded
+# profile does, or the build validates but cannot be used with TestFlight
+# (warning 90886). Both values are read back out of the profile rather
+# than written down a second time and left to drift.
+echo "==> preparing entitlements"
+security cms -D -i "$PROFILE" > target/appstore/profile.plist
+# plutil reads "." as a key-path separator, so the dots in these key
+# names have to reach it escaped -- which means single quotes, since bash
+# would otherwise eat the backslashes on the way past.
+APP_ID=$(plutil -extract 'Entitlements.com\.apple\.application-identifier' raw -o - target/appstore/profile.plist)
+TEAM_ID=$(plutil -extract 'Entitlements.com\.apple\.developer\.team-identifier' raw -o - target/appstore/profile.plist)
+[ -n "$APP_ID" ] && [ -n "$TEAM_ID" ] || fail "could not read the identifiers out of $PROFILE"
+
+SIGNING_ENTITLEMENTS=target/appstore/signing.entitlements
+cp tools/appstore.entitlements "$SIGNING_ENTITLEMENTS"
+plutil -insert 'com\.apple\.application-identifier' -string "$APP_ID" "$SIGNING_ENTITLEMENTS"
+plutil -insert 'com\.apple\.developer\.team-identifier' -string "$TEAM_ID" "$SIGNING_ENTITLEMENTS"
+echo "    $APP_ID"
+
 echo "==> signing the app ($APP_CERT)"
 codesign --force --timestamp --options runtime \
-    --entitlements tools/appstore.entitlements \
+    --entitlements "$SIGNING_ENTITLEMENTS" \
     --sign "$APP_CERT" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 

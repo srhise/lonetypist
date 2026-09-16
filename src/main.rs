@@ -9,8 +9,10 @@ mod input;
 mod keymap;
 mod menu;
 mod overlay;
+mod paths;
 mod present;
 mod print;
+mod scope;
 #[cfg(test)]
 mod simulate;
 mod status;
@@ -56,6 +58,9 @@ struct Shell {
     mouse_down: bool,
     start: Instant,
     config: config::Config,
+    /// The writing folder's sandbox grant, held open for as long as the
+    /// app runs. Dropping it takes the access away.
+    access: Option<scope::Access>,
     /// Text recovered from a backup, held until the prompt is answered.
     recovery: Option<String>,
     last_backup_ms: u64,
@@ -75,6 +80,7 @@ impl Shell {
             mouse_down: false,
             start: Instant::now(),
             config: config::Config::default(),
+            access: None,
             recovery: None,
             last_backup_ms: 0,
             last_fullscreen: false,
@@ -213,23 +219,22 @@ impl Shell {
         }
     }
 
-    /// A bare name lands in the base directory; anything with a slash or
-    /// a tilde is taken as a path, the way a shell would read it.
-    fn resolve_name(&self, value: &str) -> std::path::PathBuf {
-        let value = value.trim();
-        if let Some(rest) = value.strip_prefix("~/") {
-            if let Some(home) = dirs::home_dir() {
-                return home.join(rest);
-            }
-        }
-        let p = std::path::Path::new(value);
-        if p.is_absolute() || value.contains('/') {
-            return p.to_path_buf();
-        }
-        self.base_dir().join(value)
+    /// A bare name lands in the writing folder; anything with a slash or
+    /// a tilde is taken as a path, the way a shell would read it. Inside
+    /// the sandbox the writing folder is a fence as well as a default.
+    fn resolve_name(&self, value: &str) -> Result<std::path::PathBuf, paths::Error> {
+        paths::resolve(
+            &self.base_dir(),
+            dirs::home_dir().as_deref(),
+            value,
+            scope::sandboxed(),
+        )
     }
 
     fn base_dir(&self) -> std::path::PathBuf {
+        if let Some(access) = self.access.as_ref() {
+            return access.path().to_path_buf();
+        }
         self.config
             .base_dir
             .clone()
@@ -237,8 +242,46 @@ impl Shell {
             .unwrap_or_else(|| std::path::PathBuf::from("."))
     }
 
+    /// The sandbox hands the app an empty container and nothing else, so
+    /// a sandboxed first launch asks where the writing lives and keeps a
+    /// bookmark to it. Declining is survivable: the container still
+    /// works, it is just somewhere Finder will not show.
+    fn ensure_writing_folder(&mut self) {
+        if !scope::sandboxed() {
+            return;
+        }
+        if let Some(access) = scope::load_bookmark().and_then(|b| scope::resolve(&b)) {
+            self.access = Some(access);
+            return;
+        }
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title("Choose where Lone Typist keeps your writing")
+            .pick_folder()
+        else {
+            return;
+        };
+        if let Some(data) = scope::bookmark(&dir) {
+            let _ = scope::save_bookmark(&data);
+            self.access = scope::resolve(&data);
+        }
+    }
+
     fn act_on_field(&mut self, purpose: Purpose, value: &str) {
-        let path = self.resolve_name(value);
+        let path = match self.resolve_name(value) {
+            Ok(p) => p,
+            Err(paths::Error::Empty) => return,
+            Err(paths::Error::Outside) => {
+                let base = self.base_dir();
+                self.error(
+                    "Outside your writing folder",
+                    &format!(
+                        "This copy can only reach files in\n{}\n\nUse Open (Cmd-O) for anything else.",
+                        base.display()
+                    ),
+                );
+                return;
+            }
+        };
         match purpose {
             Purpose::Retrieve => match fileio::load(&path) {
                 Ok(loaded) => {
@@ -602,6 +645,10 @@ impl ApplicationHandler for Shell {
             self.state.set_fullscreen(true);
             self.sync_settings();
         }
+
+        // Sandboxed, nothing outside the container is reachable until the
+        // user says where their writing lives.
+        self.ensure_writing_folder();
 
         // Ask what is being written before anything else -- Esc skips
         // straight to an untitled buffer.

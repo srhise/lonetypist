@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lone Typist Privacy</title>
+<meta name="description" content="Lone Typist collects nothing. It has no accounts, no analytics, and no network connection.">
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+  @font-face {
+    font-family: "IBM VGA";
+    src: url("fonts/WebPlus_IBM_VGA_8x16.woff") format("woff");
+    font-display: swap;
+  }
+
+  :root {
+    --blue:   #0000a8;
+    --white:  #ffffff;
+    --gray:   #a8a8a8;
+    --yellow: #fcfc54;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { background: var(--blue); }
+
+  body {
+    background: var(--blue);
+    color: var(--white);
+    font-family: "IBM VGA", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 16px;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 3rem 16px 0;
+  }
+
+  main { width: 100%; max-width: 80ch; }
+
+  a { color: var(--white); }
+  a:hover { background: var(--white); color: var(--blue); text-decoration: none; }
+
+  h1 {
+    font-size: 1em;
+    font-weight: normal;
+    color: var(--yellow);
+    margin-bottom: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1em;
+    font-weight: normal;
+    color: var(--yellow);
+    margin-bottom: .75rem;
+  }
+
+  section { margin-bottom: 2.5rem; }
+  main p { max-width: 65ch; margin-bottom: 1rem; }
+  main p:last-child { margin-bottom: 0; }
+  .date { color: var(--gray); }
+
+  footer {
+    margin-top: auto;
+    width: 100%;
+    text-align: center;
+  }
+  footer .links { margin-bottom: 1.5rem; color: var(--gray); }
+  footer .statusline {
+    max-width: 80ch;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    gap: 2ch;
+    padding: .25rem 0 .75rem;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Lone Typist privacy policy</h1>
+
+  <section>
+    <p>Lone Typist collects nothing. There are no accounts, no
+    analytics, no crash reporting service, no advertising and no
+    tracking of any kind. The app makes no network connections, so
+    nothing you write can leave your Mac through it.</p>
+  </section>
+
+  <section>
+    <h2>What stays on your Mac</h2>
+    <p>Your documents are plain text files, saved where you put them.
+    The app also keeps a settings file, timed backup copies of the
+    document you are working on, and, if it ever crashes, a crash log.
+    Those live in your Library folder, they stay on your Mac, and
+    deleting the app's Application Support folder removes them.</p>
+  </section>
+
+  <section>
+    <h2>Printing</h2>
+    <p>Printing hands your text to the printer you choose through
+    macOS's own printing system. Nothing else sees it.</p>
+  </section>
+
+  <section>
+    <h2>Questions</h2>
+    <p>Write to <a href="mailto:sean@craftedup.com">sean@craftedup.com</a>,
+    or read the source at
+    <a href="https://github.com/srhise/lonetypist">github.com/srhise/lonetypist</a>.</p>
+    <p class="date">Last updated 16 September 2026. Lone Typist is made
+    by Crafted LLC.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p class="links">
+    <a href="./">Lone Typist</a> │
+    <a href="https://github.com/srhise/lonetypist">GitHub</a> │
+    <a href="https://github.com/srhise/lonetypist/blob/main/LICENSE">MIT license</a>
+  </p>
+  <p class="statusline">
+    <span>C:\SRHISE\LONETYP\PRIVACY.HTM</span>
+    <span>Doc 1   Pg 1   Ln 1"   Pos 1"</span>
+  </p>
+</footer>
+</body>
+</html>

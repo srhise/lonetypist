@@ -42,6 +42,7 @@ cargo run                 # run it
 cargo test                # 272 tests, all headless
 ./tools/package.sh        # build "target/Lone Typist.app"
 ./tools/release.sh        # sign, notarize, draft a GitHub release
+./tools/appstore.sh       # sandboxed build, validated for the App Store
 ```
 
 ## Menu
@@ -183,6 +184,25 @@ Every 30 seconds a modified document is copied to:
 This never overwrites your own file — it mirrors WordPerfect's timed
 backup. If a backup outlives its document, the next launch offers to
 recover it. Settings live beside it in `config.toml`; delete it to reset.
+
+## Two builds, one binary
+
+The download here and the Mac App Store copy are the same program. The
+App Store requires the sandbox, which rewrites `$HOME` to a private
+container: a typed path like `~/Documents/chapter-one.txt` would save
+somewhere you cannot see, and report success. So the app asks the OS
+whether it is sandboxed (`APP_SANDBOX_CONTAINER_ID`) and, if it is:
+
+- asks once for a writing folder, and keeps a security-scoped bookmark
+  to it so the permission survives a relaunch,
+- resolves bare names inside that folder, and refuses a typed path that
+  leaves it rather than writing somewhere invisible. `Cmd-O` still
+  reaches anywhere, because the Open panel grants access as you pick.
+
+Outside the sandbox none of that applies and the path rules are the
+shell's. The fence itself is `src/paths.rs`, which is pure and tested;
+`src/scope.rs` holds the small amount of Objective-C that bookmarks
+need.
 
 ## How it fits together
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Every Mac App Store app runs sandboxed. -->
+    <key>com.apple.security.app-sandbox</key>              <true/>
+    <!-- Files the user picks in an Open or Save panel, or in the
+         writing-folder prompt. -->
+    <key>com.apple.security.files.user-selected.read-write</key> <true/>
+    <!-- Keeps the writing folder across launches; without this the grant
+         dies with the process. -->
+    <key>com.apple.security.files.bookmarks.app-scope</key> <true/>
+    <!-- Shift-F7 hands the job to CUPS. -->
+    <key>com.apple.security.print</key>                    <true/>
+</dict>
+</plist>

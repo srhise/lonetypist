@@ -47,9 +47,13 @@ BEZEL = SIZE * 0.055
 SX = SY = BEZEL
 SW = SH = SIZE - 2 * BEZEL
 
-TEXT = "LT"
-CELLS = len(TEXT) + 1                      # the cursor takes the third cell
-scale = SW * 0.74 / (CELLS * 8)
+TEXT = "T"
+SHOW_CURSOR = '--cursor' in sys.argv       # the letter alone, unless asked
+CELLS = len(TEXT) + (1 if SHOW_CURSOR else 0)
+
+# A cell is twice as tall as it is wide, so with only a cell or two on
+# screen the height is what runs out first. Constrain by both.
+scale = min(SW * 0.74 / (CELLS * 8), SH * 0.62 / 16)
 cw, chh = 8 * scale, 16 * scale
 
 # Lowercase would sit low in the cell; centre on the ink, not the box.
@@ -72,11 +76,12 @@ for i, c in enumerate(TEXT):
                     if 0 <= x < SIZE and 0 <= y < SIZE:
                         text_mask[y][x] = 1.0
 
-cx0 = ox + len(TEXT) * cw
-for y in range(int(oy + top * scale), int(oy + bottom * scale)):
-    for x in range(int(cx0), min(int(cx0 + cw), SIZE)):
-        if 0 <= x < SIZE and 0 <= y < SIZE:
-            cursor_mask[y][x] = 1.0
+if SHOW_CURSOR:
+    cx0 = ox + len(TEXT) * cw
+    for y in range(int(oy + top * scale), int(oy + bottom * scale)):
+        for x in range(int(cx0), min(int(cx0 + cw), SIZE)):
+            if 0 <= x < SIZE and 0 <= y < SIZE:
+                cursor_mask[y][x] = 1.0
 
 
 def blur(src, radius):

@@ -5,7 +5,7 @@
 # standard library: the API wants an ES256 JWT, and OpenSSL can make one.
 #
 # Credentials come from the environment, never from this file:
-#   ASC_KEY_ID      the key's id, e.g. V5J5DDXHW2
+#   ASC_KEY_ID      the key's id, ten characters, e.g. ABCD1234EF
 #   ASC_ISSUER_ID   the team's issuer id (a UUID). Omit for an
 #                   individual key, which is scoped to one person instead.
 #   ASC_KEY         path to AuthKey_<id>.p8, if it is not in the usual

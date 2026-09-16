@@ -38,17 +38,20 @@ fail() { echo "error: $*" >&2; exit 1; }
 
 # --- preflight -------------------------------------------------------------
 
+# The same certificate goes by two names: Xcode calls it "Apple
+# Distribution", while a MAC_APP_DISTRIBUTION one issued through the API
+# arrives as "3rd Party Mac Developer Application". Either signs a Mac
+# App Store build.
 APP_CERT=$(security find-identity -v -p codesigning \
-    | awk -F'"' '/Apple Distribution/ {print $2; exit}')
-[ -n "$APP_CERT" ] || fail 'no "Apple Distribution" certificate in the keychain.
-Create one under the Crafted team at developer.apple.com -> Certificates,
-or in Xcode -> Settings -> Accounts -> Manage Certificates -> "+".'
+    | awk -F'"' '/Apple Distribution|3rd Party Mac Developer Application/ {print $2; exit}')
+[ -n "$APP_CERT" ] || fail 'no Mac App Store application certificate in the
+keychain. Run ./tools/asc-bootstrap.sh to create one.'
 
 PKG_CERT=$(security find-identity -v \
     | awk -F'"' '/3rd Party Mac Developer Installer|Mac Installer Distribution/ {print $2; exit}')
 [ -n "$PKG_CERT" ] || fail 'no "Mac Installer Distribution" certificate in the
 keychain. It is a separate certificate from the application one, and the
-package cannot be signed without it.'
+package cannot be signed without it. Run ./tools/asc-bootstrap.sh.'
 
 PROFILE=${PROFILE:-}
 [ -n "$PROFILE" ] && [ -f "$PROFILE" ] \

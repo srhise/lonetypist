@@ -120,6 +120,10 @@ when 'post'
   path = ARGV.shift || die('usage: post <path> <json>')
   puts JSON.pretty_generate(request('POST', path, body: ARGV.shift))
 
+when 'patch'
+  path = ARGV.shift || die('usage: patch <path> <json>')
+  puts JSON.pretty_generate(request('PATCH', path, body: ARGV.shift))
+
 when 'apps'
   rows(request('GET', '/v1/apps', query: 'limit=200'), 'id', 'bundleId', 'name', 'sku')
 

@@ -18,10 +18,9 @@ if [ "$BIN" = "target/release/lonetypist" ]; then
 fi
 
 echo "==> rendering icon"
-python3 tools/make-icon.py target/icon.bmp
+python3 tools/make-icon.py target/icon.png
 ICONSET=target/lonetypist.iconset
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"
-sips -s format png target/icon.bmp --out target/icon.png >/dev/null
 for size in 16 32 64 128 256 512 1024; do
     sips -z $size $size target/icon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
 done

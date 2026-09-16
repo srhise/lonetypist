@@ -37,28 +37,45 @@ make_cert() {
         return
     fi
 
-    echo "==> requesting $type"
-    openssl req -new -newkey rsa:2048 -nodes -keyout "$key" -out "$csr" \
-        -subj "/emailAddress=sean@craftedup.com/CN=$APP_NAME/C=US" 2>/dev/null
-    chmod 600 "$key"
+    # An earlier run may have obtained the certificate and then failed to
+    # install it. Apple would happily issue a second one, so reuse what is
+    # already on disk rather than littering the account with duplicates.
+    if [ -s "$key" ] && [ -s "$cer" ]; then
+        echo "==> $type already issued, installing the copy on disk"
+    else
+        echo "==> requesting $type"
+        openssl req -new -newkey rsa:2048 -nodes -keyout "$key" -out "$csr" \
+            -subj "/emailAddress=sean@craftedup.com/CN=$APP_NAME/C=US" 2>/dev/null
+        chmod 600 "$key"
 
-    ruby -rjson -e 'puts JSON.dump(data: {type: "certificates", attributes: {
-        certificateType: ARGV[0], csrContent: File.read(ARGV[1])}})' \
-        "$type" "$csr" > "$OUT/$type.body.json"
+        ruby -rjson -e 'puts JSON.dump(data: {type: "certificates", attributes: {
+            certificateType: ARGV[0], csrContent: File.read(ARGV[1])}})' \
+            "$type" "$csr" > "$OUT/$type.body.json"
 
-    $ASC post /v1/certificates "$(cat "$OUT/$type.body.json")" > "$OUT/$type.response.json"
+        $ASC post /v1/certificates "$(cat "$OUT/$type.body.json")" > "$OUT/$type.response.json"
 
-    ruby -rjson -rbase64 -e '
-        content = JSON.parse(File.read(ARGV[0])).dig("data", "attributes", "certificateContent")
-        File.binwrite(ARGV[1], Base64.decode64(content))' \
-        "$OUT/$type.response.json" "$cer"
+        ruby -rjson -rbase64 -e '
+            content = JSON.parse(File.read(ARGV[0])).dig("data", "attributes", "certificateContent")
+            File.binwrite(ARGV[1], Base64.decode64(content))' \
+            "$OUT/$type.response.json" "$cer"
+    fi
 
     openssl x509 -inform DER -in "$cer" -out "$pem"
-    openssl pkcs12 -export -out "$p12" -inkey "$key" -in "$pem" -passout pass: 2>/dev/null
+
+    # The keychain cannot read OpenSSL 3's default PKCS#12 encryption, and
+    # refuses an empty passphrase besides: hence the old algorithms and a
+    # throwaway password that never leaves this function.
+    local pass
+    pass=$(openssl rand -hex 16)
+    openssl pkcs12 -export -legacy -out "$p12" -inkey "$key" -in "$pem" \
+        -passout "pass:$pass" 2>/dev/null ||
+        openssl pkcs12 -export -out "$p12" -inkey "$key" -in "$pem" \
+            -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+            -passout "pass:$pass"
     chmod 600 "$p12"
 
     # Importing may ask for the login keychain password the first time.
-    security import "$p12" -P "" -T /usr/bin/codesign -T /usr/bin/productbuild
+    security import "$p12" -P "$pass" -T /usr/bin/codesign -T /usr/bin/productbuild
     echo "    imported $keychain_name"
 }
 
@@ -68,7 +85,7 @@ make_cert MAC_INSTALLER_DISTRIBUTION "Mac Installer Distribution"
 # --- bundle id -------------------------------------------------------------
 
 echo "==> checking the bundle id"
-BUNDLE_RESOURCE=$($ASC get /v1/bundleIds "filter\[identifier\]=$BUNDLE" \
+BUNDLE_RESOURCE=$($ASC get /v1/bundleIds "filter[identifier]=$BUNDLE" \
     | ruby -rjson -e 'puts (JSON.parse($stdin.read)["data"].first || {})["id"]')
 
 if [ -z "$BUNDLE_RESOURCE" ]; then

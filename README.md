@@ -42,8 +42,15 @@ cargo run                 # run it
 cargo test                # 272 tests, all headless
 ./tools/package.sh        # build "target/Lone Typist.app"
 ./tools/release.sh        # sign, notarize, draft a GitHub release
+./tools/asc-bootstrap.sh  # certificates and profile, via the API
 ./tools/appstore.sh       # sandboxed build, validated for the App Store
 ```
+
+The two App Store scripts need an App Store Connect API key: its id in
+`ASC_KEY_ID`, the team's issuer id in `ASC_ISSUER_ID`, and
+`AuthKey_<id>.p8` in `~/.appstoreconnect/private_keys/`. `tools/asc.rb`
+talks to the API directly (`tools/asc.rb apps`, `certs`, `profiles`) and
+needs nothing installed — Ruby's standard library can sign the token.
 
 ## Menu
 

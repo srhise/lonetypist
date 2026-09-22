@@ -1607,6 +1607,61 @@ the wall.",
         println!("wrote target/help-preview.bmp");
     }
 
+    /// The states the store screenshots show, dumped at framebuffer
+    /// resolution so the listing can scale them by a whole number.
+    /// `cargo test dump_store_previews -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_store_previews() {
+        use crate::input::Purpose;
+        use crate::vga::{FB_HEIGHT, FB_WIDTH};
+
+        let sample = "It was a bright cold day in April, and the clocks were \
+striking thirteen. Winston Smith, his chin nuzzled into his breast in an effort \
+to escape the vile wind, slipped quickly through the glass doors of Victory \
+Mansions, though not quickly enough to prevent a swirl of gritty dust from \
+entering along with him.";
+
+        let shot = |name: &str, prepare: &dyn Fn(&mut App)| {
+            let mut a = App::new();
+            a.set_path(
+                std::path::PathBuf::from("/Users/srhise/Documents/chapter-one.txt"),
+                false,
+            );
+            a.load_text(sample);
+            prepare(&mut a);
+            a.paint();
+            let mut fb = vec![0u8; FB_WIDTH * FB_HEIGHT * 4];
+            a.screen().render(&mut fb);
+            crate::vga::preview::write_bmp(&format!("target/shot-{name}.bmp"), &fb);
+            println!("wrote target/shot-{name}.bmp");
+        };
+
+        // The bar alone shows no shortcuts; it is the open dropdown that
+        // teaches them, which is a Down away.
+        shot("menu", &|a| {
+            a.apply(Command::MenuBar, 0);
+            a.apply(
+                Command::Move {
+                    motion: crate::keymap::Motion::Down,
+                    extend: false,
+                },
+                0,
+            );
+        });
+        // Printing is raised by the window layer, not by the command.
+        shot("print", &|a| a.open_print(Some("HP_LaserJet".to_string())));
+        shot("count", &|a| a.apply(Command::ShowWordCount, 0));
+        shot("name", &|a| {
+            a.open_field(
+                Purpose::CreateAtLaunch,
+                "New Document",
+                "Document to be created:",
+                "",
+            )
+        });
+    }
+
     // --- focus routing ---
 
     fn key(a: &mut App, cmd: Command) {

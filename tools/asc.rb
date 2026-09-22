@@ -124,6 +124,11 @@ when 'patch'
   path = ARGV.shift || die('usage: patch <path> <json>')
   puts JSON.pretty_generate(request('PATCH', path, body: ARGV.shift))
 
+when 'delete'
+  path = ARGV.shift || die('usage: delete <path>')
+  request('DELETE', path)
+  puts "deleted #{path}"
+
 when 'apps'
   rows(request('GET', '/v1/apps', query: 'limit=200'), 'id', 'bundleId', 'name', 'sku')
 

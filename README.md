@@ -46,6 +46,18 @@ cargo test                # 272 tests, all headless
 ./tools/appstore.sh       # sandboxed build, validated for the App Store
 ```
 
+`vendor/winit-0.30.13` is winit with one function emptied out. It called
+the private `CGSSetWindowBackgroundBlurRadius` to blur a window
+background — something this app never asks for — and the Mac App Store
+rejects any binary that so much as references it. winit fixes this in
+0.31 by moving to the public `NSVisualEffectView`; when that leaves
+beta, delete `vendor/` and the `[patch.crates-io]` block. Before any
+submission, check the binary itself:
+
+```sh
+nm -u target/release/lonetypist | grep CGSSet   # must print nothing
+```
+
 The two App Store scripts need an App Store Connect API key: its id in
 `ASC_KEY_ID`, the team's issuer id in `ASC_ISSUER_ID`, and
 `AuthKey_<id>.p8` in `~/.appstoreconnect/private_keys/`. `tools/asc.rb`

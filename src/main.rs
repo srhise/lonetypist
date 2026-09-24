@@ -594,7 +594,6 @@ impl Shell {
             surface: (size.width, size.height),
             time: elapsed as f32 / 1000.0,
             effects: self.state.effects(),
-            border: vga::PALETTE[app::BG as usize],
         };
         if let Err(e) = pixels.render_with(|encoder, target, context| {
             present.render(encoder, target, context, &params);

@@ -2,9 +2,15 @@
 //
 // The quad covers the whole surface. Where the surface is wider or
 // taller than 4:3, the picture is letterboxed inside it and the slack
-// is painted in the screen's own background colour, with the same
-// scanlines and vignette running across it, so the blue field reads as
-// one continuous surface rather than a picture inside a black bezel.
+// continues whatever the picture's edge holds on that row, with the same
+// scanlines and vignette running across it, so the field reads as one
+// continuous surface rather than a picture inside a bezel.
+//
+// Continuing the edge rather than filling with one flat colour is what
+// lets a full-width element run to the edges of the display: the menu
+// bar's grey reaches the sides in fullscreen instead of stopping short.
+// Every other row ends in the background colour anyway, so they look
+// exactly as they did.
 
 struct Uniforms {
     // Clip-space scale that letterboxes the 4:3 image inside the surface.
@@ -15,9 +21,6 @@ struct Uniforms {
     // 0.0 = plain, 1.0 = CRT effects.
     effects: f32,
     _pad: vec2<f32>,
-    // Colour of the slack around the picture, in the texture's colour
-    // space (linear, since the framebuffer is sRGB-decoded on sample).
-    border: vec4<f32>,
 };
 
 const TEX_SIZE: vec2<f32> = vec2<f32>(720.0, 400.0);
@@ -77,6 +80,13 @@ fn on_picture(uv: vec2<f32>) -> bool {
     return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
 }
 
+// Pull a uv back onto the picture, to the centre of the nearest edge
+// texel. Slack sampled through this continues the row it abuts.
+fn edge_clamped(uv: vec2<f32>) -> vec2<f32> {
+    let half_texel = vec2<f32>(0.5, 0.5) / TEX_SIZE;
+    return clamp(uv, half_texel, vec2<f32>(1.0, 1.0) - half_texel);
+}
+
 // Source framebuffer is 720x400; scanlines run at that row frequency.
 const SOURCE_HEIGHT: f32 = 400.0;
 // Tube curvature. 0.0 is a flat screen with square 90-degree corners;
@@ -101,11 +111,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sampling stays in uniform control flow (it needs derivatives), so
     // the slack is always sampled at the clamped edge and then replaced.
     let inside = on_picture(in.uv);
-    let border = u.border.rgb;
 
     if (u.effects < 0.5) {
-        let picture = textureSample(tex, samp, sharp_uv(in.uv)).rgb;
-        return vec4<f32>(select(border, picture, inside), 1.0);
+        return vec4<f32>(textureSample(tex, samp, sharp_uv(edge_clamped(in.uv))).rgb, 1.0);
     }
 
     var uv = in.uv;
@@ -115,7 +123,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Past the edge of a curved tube there is no picture either.
     let lit = inside && on_picture(uv);
 
-    var color = select(border, textureSample(tex, samp, sharp_uv(uv)).rgb, lit);
+    var color = textureSample(tex, samp, sharp_uv(edge_clamped(uv))).rgb;
 
     // Phosphor bloom: bright text spills into the dark around it.
     //

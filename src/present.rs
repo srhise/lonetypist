@@ -17,38 +17,18 @@ struct Uniforms {
     time: f32,
     effects: f32,
     _pad: [f32; 2],
-    /// What the slack around the 4:3 picture is painted, in the
-    /// framebuffer texture's colour space.
-    border: [f32; 4],
 }
 
 pub struct Params {
     pub surface: (u32, u32),
     pub time: f32,
     pub effects: bool,
-    /// The screen's background, as a palette entry. The letterbox slack
-    /// takes this colour so the field runs edge to edge.
-    pub border: [u8; 3],
 }
 
 pub struct Present {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
-    /// Whether the framebuffer is sampled through an sRGB decode, in
-    /// which case the border has to be handed over decoded too.
-    texture_is_srgb: bool,
-}
-
-/// The sRGB transfer function, inverted: an 8-bit palette value to the
-/// linear intensity the GPU sees after sampling an sRGB texture.
-fn srgb_to_linear(c: u8) -> f32 {
-    let v = c as f32 / 255.0;
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 impl Present {
@@ -83,7 +63,6 @@ impl Present {
                 time: 0.0,
                 effects: 0.0,
                 _pad: [0.0, 0.0],
-                border: [0.0, 0.0, 0.0, 1.0],
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -178,26 +157,12 @@ impl Present {
             pipeline,
             bind_group,
             uniform_buffer,
-            texture_is_srgb: pixels.texture().format().is_srgb(),
         }
-    }
-
-    /// The border colour as the shader must see it: the same value the
-    /// framebuffer's own background produces when sampled.
-    fn border_value(&self, rgb: [u8; 3]) -> [f32; 4] {
-        let convert = |c: u8| {
-            if self.texture_is_srgb {
-                srgb_to_linear(c)
-            } else {
-                c as f32 / 255.0
-            }
-        };
-        [convert(rgb[0]), convert(rgb[1]), convert(rgb[2]), 1.0]
     }
 
     /// Clip-space scale that fits a 4:3 image inside the surface without
     /// distorting it, leaving slack on whichever axis is longer. The
-    /// shader paints that slack in the screen's background colour.
+    /// shader continues the picture's edge across that slack.
     fn letterbox(surface: (u32, u32)) -> [f32; 2] {
         let (w, h) = (surface.0.max(1) as f32, surface.1.max(1) as f32);
         let surface_aspect = w / h;
@@ -229,7 +194,6 @@ impl Present {
                     time: params.time,
                     effects: if params.effects { 1.0 } else { 0.0 },
                     _pad: [0.0, 0.0],
-                    border: self.border_value(params.border),
                 }
             }),
         );
@@ -319,15 +283,6 @@ mod tests {
                 "{surface:?} -> {s:?}"
             );
         }
-    }
-
-    #[test]
-    fn the_srgb_curve_maps_the_ends_and_the_vga_blue() {
-        assert_eq!(srgb_to_linear(0), 0.0);
-        assert!((srgb_to_linear(255) - 1.0).abs() < 1e-6);
-        // Palette blue is 0xAA; linear it is about 0.402.
-        let blue = srgb_to_linear(0xAA);
-        assert!((blue - 0.402).abs() < 0.002, "got {blue}");
     }
 
     #[test]

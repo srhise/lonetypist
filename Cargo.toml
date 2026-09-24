@@ -20,6 +20,15 @@ objc2-foundation = "0.3"
 [dev-dependencies]
 tempfile = "3"
 
+# App Review rejects any binary that references
+# CGSSetWindowBackgroundBlurRadius, which winit 0.30 declares unconditionally
+# for window blur -- a feature this app never asks for. The vendored copy drops
+# that one function. Upstream fixes this in 0.31 by moving to the public
+# NSVisualEffectView; when 0.31 leaves beta, drop vendor/ and take it from
+# crates.io again.
+[patch.crates-io]
+winit = { path = "vendor/winit-0.30.13" }
+
 [profile.release]
 opt-level = 3
 lto = true

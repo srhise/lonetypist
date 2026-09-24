@@ -52,9 +52,20 @@ pub fn migrate_old_dir() {
 fn migrate_in(root: &Path) {
     let old = root.join(OLD_DIR_NAME);
     let new = root.join(DIR_NAME);
-    if old.is_dir() && !new.exists() {
-        let _ = fs::rename(old, new);
+    if !old.is_dir() {
+        return;
     }
+    // An earlier launch can leave the new folder behind empty -- a crash
+    // log that was never written, a settings save that never happened.
+    // An empty folder is not data, and must not strand the old one.
+    let occupied = fs::read_dir(&new)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    if occupied {
+        return;
+    }
+    let _ = fs::remove_dir(&new);
+    let _ = fs::rename(&old, &new);
 }
 
 fn path() -> Option<PathBuf> {
@@ -141,6 +152,25 @@ mod tests {
             fs::read_to_string(root.path().join(DIR_NAME).join("config.toml")).expect("read"),
             "dense = true\n"
         );
+    }
+
+    #[test]
+    fn an_empty_new_folder_does_not_block_the_move() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join(OLD_DIR_NAME).join("backup")).expect("mkdir");
+        fs::write(root.path().join(OLD_DIR_NAME).join("config.toml"), "dense = true\n")
+            .expect("write");
+        // The shape that actually happened: the new folder exists, empty.
+        fs::create_dir_all(root.path().join(DIR_NAME)).expect("mkdir");
+
+        migrate_in(root.path());
+
+        assert!(!root.path().join(OLD_DIR_NAME).exists(), "old folder moved");
+        assert_eq!(
+            fs::read_to_string(root.path().join(DIR_NAME).join("config.toml")).expect("read"),
+            "dense = true\n"
+        );
+        assert!(root.path().join(DIR_NAME).join("backup").is_dir());
     }
 
     #[test]

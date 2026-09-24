@@ -80,6 +80,8 @@ pub struct App {
     print_request: Option<Request>,
     /// A short readout that borrows the status line's right field.
     notice: Option<(String, u64)>,
+    /// The status line can be dismissed; its row then holds text.
+    status_line: bool,
     /// CRT effects and fullscreen live here so the shell can read them
     /// back; both persist to the config file.
     effects: bool,
@@ -107,6 +109,7 @@ impl App {
             deferred: None,
             print_request: None,
             notice: None,
+            status_line: true,
             effects: true,
             fullscreen: false,
             should_quit: false,
@@ -145,7 +148,8 @@ impl App {
 
     /// Rows of the grid available for text: everything but the status line.
     pub fn text_rows(&self) -> usize {
-        self.screen.rows() - 1 - wrap::TEXT_TOP
+        let status = usize::from(self.status_line);
+        self.screen.rows() - status - wrap::TEXT_TOP
     }
 
     /// Replace the document, as when opening a file.
@@ -231,6 +235,15 @@ impl App {
 
     pub fn set_effects(&mut self, on: bool) {
         self.effects = on;
+    }
+
+    pub fn status_line(&self) -> bool {
+        self.status_line
+    }
+
+    pub fn set_status_line(&mut self, on: bool) {
+        self.status_line = on;
+        self.scroll_to_cursor();
     }
 
     pub fn fullscreen(&self) -> bool {
@@ -549,6 +562,7 @@ impl App {
                 self.set_dense(!dense);
             }
             Command::ToggleEffects => self.effects = !self.effects,
+            Command::ToggleStatusLine => self.set_status_line(!self.status_line),
             Command::ToggleFullscreen => self.fullscreen = !self.fullscreen,
             // The shell performs these: they touch the OS. A hotkey
             // never gets here (the shell intercepts it first), so this
@@ -624,11 +638,18 @@ impl App {
 
         self.paint_selection();
         self.screen.set_cursor(None);
-        if blink_on && self.editor.selection().is_none() {
+        // An open modal owns the cursor. Blinking it in the document behind
+        // the box points at the one place the typing is not going.
+        if blink_on && self.editor.selection().is_none() && !self.overlay_owns_cursor() {
             self.paint_cursor();
         }
         self.paint_status();
-        self.paint_overlay();
+        self.paint_overlay(blink_on);
+    }
+
+    /// Whether the open overlay places the cursor itself.
+    fn overlay_owns_cursor(&self) -> bool {
+        matches!(self.overlay, Overlay::Field(_) | Overlay::Print { .. })
     }
 
     /// WordPerfect's Shift-F7 screen: the document goes away, the
@@ -660,11 +681,11 @@ impl App {
             .set_cursor(Some((sel.chars().count() - 1, bottom)));
     }
 
-    fn paint_overlay(&mut self) {
+    fn paint_overlay(&mut self, blink_on: bool) {
         match self.overlay.clone() {
             Overlay::None => {}
             Overlay::Menu(state) => self.paint_menu(&state),
-            Overlay::Field(field) => self.paint_field(&field),
+            Overlay::Field(field) => self.paint_field(&field, blink_on),
             Overlay::Message {
                 title,
                 body,
@@ -780,7 +801,7 @@ impl App {
     }
 
     /// A framed box with a single editable line and a block cursor.
-    fn paint_field(&mut self, field: &Input) {
+    fn paint_field(&mut self, field: &Input, blink_on: bool) {
         let fg = 15;
         let bg = BG;
         let inner = 44usize;
@@ -806,8 +827,12 @@ impl App {
         let offset = field.cursor().saturating_sub(inner.saturating_sub(1));
         let shown: String = value.iter().skip(offset).take(inner).collect();
         self.screen.put_str(fx, fy, &shown, 0, 7);
+        // The same underline cursor the document uses, blinking in step with
+        // it, so the caret is wherever the next keystroke will land.
         let cx = fx + (field.cursor() - offset).min(inner - 1);
-        self.screen.invert(cx, fy);
+        if blink_on {
+            self.screen.set_cursor(Some((cx, fy)));
+        }
 
         let help = "Enter  Accept     Esc  Cancel";
         let hx = x + (width.saturating_sub(help.chars().count())) / 2;
@@ -815,6 +840,9 @@ impl App {
     }
 
     fn paint_status(&mut self) {
+        if !self.status_line {
+            return;
+        }
         let row = self.screen.rows() - 1;
         // The status line is its own colour across the full width.
         for col in 0..self.screen.cols() {
@@ -1148,6 +1176,56 @@ mod tests {
             a.screen().cursor(),
             Some((wrap::TEXT_LEFT + 1, wrap::TEXT_TOP))
         );
+    }
+
+    #[test]
+    fn an_open_field_takes_the_cursor_from_the_document() {
+        let mut a = app_with("It was a bright cold day in April");
+        a.paint_at(0);
+        let in_document = a.screen().cursor().expect("a cursor in the document");
+
+        a.open_field(
+            Purpose::CreateAtLaunch,
+            "New Document",
+            "Document to be created:",
+            "",
+        );
+        a.paint_at(0);
+        let in_field = a.screen().cursor().expect("a cursor in the field");
+
+        assert_ne!(in_field, in_document, "the caret follows the modal");
+        assert!(
+            in_field.1 > wrap::TEXT_TOP,
+            "the caret is down in the box, not on a text row: {in_field:?}"
+        );
+    }
+
+    #[test]
+    fn dismissing_the_status_line_gives_its_row_to_the_text() {
+        let mut a = app_with("hello");
+        let rows_with = a.text_rows();
+        let bottom = a.screen().rows() - 1;
+
+        a.paint_at(0);
+        assert_eq!(
+            a.screen().cell(0, bottom).fg,
+            STATUS_FG,
+            "the status line is there to begin with"
+        );
+
+        a.apply(Command::ToggleStatusLine, T);
+        assert!(!a.status_line());
+        assert_eq!(a.text_rows(), rows_with + 1, "the text gains the freed row");
+        a.paint_at(T);
+        assert_ne!(
+            a.screen().cell(0, bottom).fg,
+            STATUS_FG,
+            "the bottom row is no longer the status line"
+        );
+
+        a.apply(Command::ToggleStatusLine, T);
+        assert!(a.status_line(), "and it comes back");
+        assert_eq!(a.text_rows(), rows_with);
     }
 
     #[test]
@@ -1652,6 +1730,7 @@ entering along with him.";
         // Printing is raised by the window layer, not by the command.
         shot("print", &|a| a.open_print(Some("HP_LaserJet".to_string())));
         shot("count", &|a| a.apply(Command::ShowWordCount, 0));
+        shot("nostatus", &|a| a.apply(Command::ToggleStatusLine, 0));
         shot("name", &|a| {
             a.open_field(
                 Purpose::CreateAtLaunch,
@@ -1953,11 +2032,11 @@ entering along with him.";
                     continue;
                 };
                 let mut a = app_with("some text");
-                let before = (a.effects(), a.dense(), a.fullscreen());
+                let before = (a.effects(), a.dense(), a.fullscreen(), a.status_line());
                 key(&mut a, cmd.clone());
                 let acted = a.take_deferred().is_some()
                     || !matches!(a.overlay(), Overlay::None)
-                    || (a.effects(), a.dense(), a.fullscreen()) != before
+                    || (a.effects(), a.dense(), a.fullscreen(), a.status_line()) != before
                     || a.should_quit
                     || matches!(cmd, Command::Undo | Command::Redo | Command::SelectAll)
                     || matches!(cmd, Command::ShowWordCount);

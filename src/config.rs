@@ -13,6 +13,8 @@ pub struct Config {
     pub effects: bool,
     pub dense: bool,
     pub fullscreen: bool,
+    /// Whether the status line is shown. Off gives its row to the text.
+    pub status_line: bool,
     pub window: (u32, u32),
     pub recent: Option<PathBuf>,
     /// Where bare filenames land. Defaults to ~/Documents.
@@ -25,6 +27,7 @@ impl Default for Config {
             effects: true,
             dense: false,
             fullscreen: false,
+            status_line: true,
             window: (1080, 810),
             recent: None,
             base_dir: None,

@@ -51,6 +51,8 @@ pub enum Command {
     ToggleHelp,
     ToggleEffects,
     ToggleDenseMode,
+    /// Dismiss the status line, giving its row back to the document.
+    ToggleStatusLine,
     ShowWordCount,
     ToggleFullscreen,
     Dismiss,
@@ -131,6 +133,7 @@ pub fn resolve(event: &KeyEvent, mods: &Modifiers) -> Option<Command> {
         Key::Named(NamedKey::F10) if shift => Some(Command::Retrieve),
         Key::Named(NamedKey::F10) => Some(Command::SaveAs),
         Key::Named(NamedKey::F3) => Some(Command::ToggleEffects),
+        Key::Named(NamedKey::F4) => Some(Command::ToggleStatusLine),
         Key::Named(NamedKey::F5) => Some(Command::ToggleDenseMode),
         Key::Named(NamedKey::F6) => Some(Command::ShowWordCount),
         Key::Named(NamedKey::F11) => Some(Command::ToggleFullscreen),

@@ -93,6 +93,7 @@ impl Shell {
         let effects = self.state.effects();
         let dense = self.state.dense();
         let fullscreen = self.state.fullscreen();
+        let status_line = self.state.status_line();
 
         if fullscreen != self.last_fullscreen {
             if let Some(w) = self.window.as_ref() {
@@ -108,10 +109,12 @@ impl Shell {
         if effects != self.config.effects
             || dense != self.config.dense
             || fullscreen != self.config.fullscreen
+            || status_line != self.config.status_line
         {
             self.config.effects = effects;
             self.config.dense = dense;
             self.config.fullscreen = fullscreen;
+            self.config.status_line = status_line;
             config::save(&self.config);
         }
     }
@@ -610,6 +613,7 @@ impl ApplicationHandler for Shell {
         self.config = config::load();
         self.state.set_effects(self.config.effects);
         self.state.set_dense(self.config.dense);
+        self.state.set_status_line(self.config.status_line);
 
         let (cw, ch) = self.config.window;
         let attrs = Window::default_attributes()

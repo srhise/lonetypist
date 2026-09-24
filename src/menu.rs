@@ -60,6 +60,7 @@ static EDIT_ITEMS: &[Item] = &[
 static VIEW_ITEMS: &[Item] = &[
     item("CRT Effects", "F3", Command::ToggleEffects),
     item("Screen Mode", "F5", Command::ToggleDenseMode),
+    item("Status Line", "F4", Command::ToggleStatusLine),
     item("Full Screen", "F11", Command::ToggleFullscreen),
 ];
 

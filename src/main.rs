@@ -772,8 +772,11 @@ impl ApplicationHandler for Shell {
         // user says where their writing lives.
         self.ensure_writing_folder();
 
-        // The app opens on a blank, untitled draft: nothing to answer
-        // before the first word. It reaches disk on the first save.
+        // The app opens on a blank, untitled draft with the File menu
+        // pulled down over it: New, Open, Draft Screenplay are right
+        // there, and Esc (or typing nothing at all) leaves the page.
+        // The draft reaches disk on the first save.
+        self.state.open_file_menu();
 
         // A backup that outlived its document means the last session did
         // not end cleanly.

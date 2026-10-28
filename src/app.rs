@@ -627,6 +627,13 @@ impl App {
         self.overlay = Overlay::Menu(MenuState::new());
     }
 
+    /// The menu bar with File pulled down: how the app greets you, so
+    /// New, Open and Draft Screenplay are the first thing on screen.
+    /// Esc puts it away and the blank page is underneath.
+    pub fn open_file_menu(&mut self) {
+        self.overlay = Overlay::Menu(MenuState::greeting());
+    }
+
     pub fn open_field(&mut self, purpose: Purpose, title: &str, label: &str, seed: &str) {
         let mut field = Input::new(purpose, title, label);
         field.set_value(seed);
@@ -638,6 +645,23 @@ impl App {
         let Overlay::Menu(state) = &mut self.overlay else {
             return None;
         };
+        // The launch menu stands aside for anyone who just starts
+        // writing: a keystroke closes it and lands on the page, and one
+        // Esc is enough.
+        if state.is_greeting() {
+            match cmd {
+                Command::Move { .. } => state.engage(),
+                Command::Newline => {}
+                Command::Dismiss => {
+                    self.overlay = Overlay::None;
+                    return None;
+                }
+                other => {
+                    self.overlay = Overlay::None;
+                    return Some(other);
+                }
+            }
+        }
         let fired = match cmd {
             Command::Move {
                 motion: Motion::Left,
@@ -3498,5 +3522,65 @@ mod sound_tests {
         a.apply(Command::ToggleSounds, 0);
         assert!(!a.sounds_on());
         assert!(a.take_sounds().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod greeting_tests {
+    use super::*;
+
+    fn greeted() -> App {
+        let mut a = App::new();
+        a.open_file_menu();
+        a
+    }
+
+    #[test]
+    fn the_app_opens_with_file_pulled_down() {
+        let a = greeted();
+        let Overlay::Menu(state) = a.overlay() else {
+            panic!("the menu is up");
+        };
+        assert_eq!(state.menu(), 0, "File");
+        assert_eq!(state.item(), Some(0), "its first item highlighted");
+    }
+
+    #[test]
+    fn just_typing_goes_to_the_page() {
+        let mut a = greeted();
+        a.apply(Command::Insert("S".to_string()), 0);
+        assert_eq!(a.overlay(), &Overlay::None);
+        assert_eq!(a.editor().to_string(), "S", "not File > Save");
+        assert_eq!(a.take_deferred(), None);
+    }
+
+    #[test]
+    fn one_escape_puts_it_away() {
+        let mut a = greeted();
+        a.apply(Command::Dismiss, 0);
+        assert_eq!(a.overlay(), &Overlay::None);
+    }
+
+    #[test]
+    fn enter_takes_the_highlighted_item() {
+        let mut a = greeted();
+        a.apply(Command::Newline, 0);
+        assert!(a.take_deferred().is_some());
+        assert_eq!(a.editor().to_string(), "");
+    }
+
+    #[test]
+    fn once_the_arrows_are_used_letters_are_shortcuts_again() {
+        let mut a = greeted();
+        a.apply(
+            Command::Move {
+                motion: Motion::Down,
+                extend: false,
+            },
+            0,
+        );
+        a.apply(Command::Insert("s".to_string()), 0);
+        assert_eq!(a.take_deferred(), Some(Command::Save));
+        assert_eq!(a.editor().to_string(), "");
     }
 }

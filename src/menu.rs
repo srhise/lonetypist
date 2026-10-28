@@ -106,6 +106,9 @@ pub static MENUS: &[Menu] = &[
 pub struct MenuState {
     menu: usize,
     item: Option<usize>,
+    /// Shown at launch rather than asked for: typing goes past it to
+    /// the page, until the arrows show the menu is being used.
+    greeting: bool,
 }
 
 impl MenuState {
@@ -113,7 +116,25 @@ impl MenuState {
         Self {
             menu: 0,
             item: None,
+            greeting: false,
         }
+    }
+
+    /// File, pulled down, as the app opens.
+    pub fn greeting() -> Self {
+        let mut state = Self::new();
+        state.item = state.first_selectable();
+        state.greeting = true;
+        state
+    }
+
+    pub fn is_greeting(&self) -> bool {
+        self.greeting
+    }
+
+    /// The menu is being used: it is no longer just a greeting.
+    pub fn engage(&mut self) {
+        self.greeting = false;
     }
 
     pub fn menu(&self) -> usize {

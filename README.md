@@ -39,7 +39,7 @@ Needs a Rust toolchain. Nothing else.
 
 ```sh
 cargo run                 # run it
-cargo test                # 347 tests, all headless
+cargo test                # 352 tests, all headless
 ./tools/package.sh        # build "target/Lone Typist.app"
 ./tools/release.sh        # sign, notarize, draft a GitHub release
 ./tools/asc-bootstrap.sh  # certificates and profile, via the API
@@ -91,8 +91,11 @@ teaches the shortcuts and then you stop needing it.
 
 ## Naming
 
-It opens on a blank, untitled draft: nothing to answer before the first
-word. The document reaches disk the first time you save it.
+It opens on a blank, untitled draft with the File menu pulled down over
+it, so New, Open and Draft Screenplay are the first thing you see. It
+asks nothing of you: start typing and the menu gets out of the way and
+the words land on the page; one `Esc` puts it away; `Enter` or the
+arrows use it. The document reaches disk the first time you save it.
 
 Saving something new -- `Cmd-S` on an untitled draft, or `F10` / `Cmd-Shift-S`
 (Save As) any time -- opens the macOS save panel beside the current

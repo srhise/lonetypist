@@ -198,7 +198,8 @@ impl Player {
                 self.last_key = i;
                 (&self.keys[i], 1.0 + a * 0.035, 0.9 + b * 0.12)
             }
-            Sound::Space => (&self.space, 1.0 + a * 0.02, 0.85),
+            // The bar is a dull thump under the strikes, not one of them.
+            Sound::Space => (&self.space, 0.94 + a * 0.02, 0.6),
             Sound::Return => (&self.ret, 1.0, 0.8),
             Sound::Bell => (&self.bell, 1.0, 0.5),
         };

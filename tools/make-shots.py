@@ -272,9 +272,28 @@ SHOTS = [
 ]
 
 
+def web_assets():
+    """Uncaptioned screens and ribbon crops for the landing page."""
+    out = 'site/public/shots'
+    os.makedirs(out, exist_ok=True)
+    for name in ('prose', 'script', 'scenes'):
+        img = crt(load(name), 810)
+        Image.fromarray((img * 255).astype(np.uint8)).save(
+            f'{out}/screen-{name}.webp', quality=88, method=6)
+    crop = (172, 224, 238, 44)
+    for ribbon in ('fresh', 'worn', 'clean'):
+        img = page(f'target/store-{ribbon}.pdf', 1, 1200 / crop[2], crop)
+        Image.fromarray((img * 255).astype(np.uint8)).save(
+            f'{out}/ribbon-{ribbon}.webp', quality=90, method=6)
+    print(out)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     only = set(sys.argv[1:])
+    if 'web' in only:
+        web_assets()
+        return
     for name, make in SHOTS:
         if only and name not in only:
             continue

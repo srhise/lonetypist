@@ -1,0 +1,12 @@
+// The landing page: static files only, served by Workers' asset handler.
+//   cd site && npx wrangler deploy
+{
+  "name": "lonetypist",
+  "account_id": "d468613cae94f280d42c6e6fb19fd1a8",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public" },
+  "workers_dev": true
+  // craftedup.com lives in a Cloudflare account this one cannot see. Once
+  // it is reachable, add:
+  //   "routes": [{ "pattern": "lonetypist.craftedup.com", "custom_domain": true }]
+}

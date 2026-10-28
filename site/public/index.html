@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lone Typist</title>
+<meta name="description" content="A distraction-free writer for the Mac that is a DOS screen. One document, eighty columns, nothing else. Write screenplays and print them like they came off a typewriter.">
+<link rel="canonical" href="https://lonetypist.craftedup.com/">
+<meta name="theme-color" content="#0000a8">
+<link rel="icon" href="/favicon.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://lonetypist.craftedup.com/">
+<meta property="og:title" content="Lone Typist">
+<meta property="og:description" content="One document. One screen. Screenplays that print like they came off a typewriter.">
+<meta property="og:image" content="https://lonetypist.craftedup.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Lone Typist",
+ "operatingSystem":"macOS 11 or later","applicationCategory":"ProductivityApplication",
+ "offers":{"@type":"Offer","price":"3.99","priceCurrency":"USD"},
+ "url":"https://lonetypist.craftedup.com/",
+ "downloadUrl":"https://apps.apple.com/us/app/lone-typist/id6812835160"}
+</script>
+<link rel="preload" href="/fonts/WebPlus_IBM_VGA_8x16.woff" as="font" type="font/woff" crossorigin>
+<style>
+  @font-face {
+    font-family: "IBM VGA";
+    src: url("/fonts/WebPlus_IBM_VGA_8x16.woff") format("woff");
+    font-display: block;
+  }
+  @font-face {
+    font-family: "Courier 10 Pitch";
+    src: url("/fonts/Courier10PitchBT-Roman.otf") format("opentype");
+    font-display: swap;
+  }
+
+  :root {
+    /* The screen: VGA's own palette. */
+    --vga-blue: #0000a8;
+    --vga-grey: #a8a8a8;
+    --vga-white: #fcfcfc;
+    --vga-yellow: #fcfc54;
+    --vga-black: #000000;
+    /* The room the monitor sits in, and the paper that comes out of it. */
+    --room: #08080f;
+    --paper: #f6f5f0;
+    --ink: #1d1c1a;
+    --ink-soft: #5b5954;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { overflow-x: clip; }
+  body {
+    background: var(--room);
+    color: var(--vga-white);
+    font-family: "IBM VGA", ui-monospace, Menlo, monospace;
+    -webkit-font-smoothing: none;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--vga-yellow); outline-offset: 3px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+
+  /* ---- The monitor ------------------------------------------------- */
+
+  .room {
+    min-height: min(92svh, 1100px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 40px;
+    padding: 48px 16px 64px;
+    /* The only light in the room is the screen. */
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 42%, rgba(0, 0, 168, .30), transparent 70%),
+      var(--room);
+  }
+
+  .tube {
+    position: relative;
+    width: min(100%, 1080px, calc((min(92svh, 1100px) - 220px) * 4 / 3));
+    min-width: min(100%, 340px);
+    aspect-ratio: 4 / 3;
+    background: var(--vga-blue);
+    border: 10px solid #050508;
+    border-radius: 6px;
+    box-shadow: 0 0 120px rgba(40, 40, 255, .22), 0 30px 80px rgba(0, 0, 0, .7);
+    overflow: hidden;
+    cursor: text;
+  }
+  /* The 720x400 grid, scaled to the tube by script; 4:3 stretches it
+     vertically, as a VGA monitor did. */
+  .grid {
+    position: absolute;
+    left: 0; top: 0;
+    width: 720px; height: 400px;
+    transform-origin: 0 0;
+    font-size: 16px;
+    line-height: 16px;
+    letter-spacing: 1px;   /* 8-dot glyphs in 9-dot cells */
+    white-space: pre;
+    color: var(--vga-grey);
+    text-shadow: 0 0 2px rgba(200, 200, 255, .35);
+  }
+  .grid .row { height: 16px; }
+  .grid .bar { background: var(--vga-grey); color: var(--vga-black); text-shadow: none; }
+  .grid .bar .hot { color: var(--vga-white); background: var(--vga-black); }
+  .grid .bright { color: var(--vga-white); }
+  .grid .status { color: var(--vga-white); }
+  .grid .caret {
+    display: inline-block;
+    width: 8px;
+    border-bottom: 2px solid var(--vga-white);
+    height: 15px;
+    vertical-align: top;
+    animation: blink 1.07s steps(1) infinite;
+  }
+  @keyframes blink { 50% { border-color: transparent; } }
+  /* Scanlines at the source row rate, and the glass. */
+  .tube::after {
+    content: "";
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(to bottom, transparent 0 1.5px, rgba(0, 0, 0, .16) 1.5px 2.7px),
+      radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0, 0, 0, .28));
+    background-size: 100% calc(100% / 400 * 2), 100% 100%;
+  }
+  .kbd {
+    position: absolute; left: 0; top: 0;
+    width: 1px; height: 1px; opacity: 0;
+    border: 0; resize: none;
+    font-size: 16px;   /* keeps iOS from zooming on focus */
+  }
+  .sound {
+    position: absolute;
+    right: 0; top: 0;
+    height: 16px;
+    padding: 0 9px;
+    font: inherit;
+    font-size: 16px;
+    line-height: 16px;
+    letter-spacing: 1px;
+    color: var(--vga-black);
+    background: var(--vga-grey);
+    border: 0;
+    cursor: pointer;
+    transform-origin: 100% 0;
+  }
+  .sound[aria-pressed="true"] { color: var(--vga-white); background: var(--vga-black); }
+
+  .buy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    text-align: center;
+  }
+  .store {
+    display: inline-block;
+    max-width: 100%;
+    padding: 14px clamp(14px, 4vw, 28px) 12px;
+    font-size: clamp(17px, 4.4vw, 22px);
+    letter-spacing: 1px;
+    color: var(--vga-black);
+    background: var(--vga-grey);
+    text-decoration: none;
+    box-shadow: 8px 8px 0 #000;
+  }
+  .store:hover, .store:focus-visible { background: var(--vga-white); }
+  .store:active { transform: translate(4px, 4px); box-shadow: 4px 4px 0 #000; }
+  /* Eighty columns are too fine to read on a phone; say it here instead. */
+  .pitch { display: none; max-width: 36ch; color: var(--vga-white); font-size: 18px; line-height: 1.4; text-align: center; }
+  @media (max-width: 600px) { .pitch { display: block; } }
+  .fine { color: var(--vga-grey); font-size: 16px; letter-spacing: .5px; }
+
+  /* ---- The paper --------------------------------------------------- */
+
+  .desk {
+    padding: 24px 16px 96px;
+    background:
+      radial-gradient(ellipse 60% 40% at 50% 0%, rgba(0, 0, 168, .12), transparent 70%),
+      var(--room);
+  }
+  /* A US Letter sheet at true size: 12pt Courier at ten characters to
+     the inch, 1.5in left margin, 1in right. */
+  .sheet {
+    position: relative;
+    max-width: 816px;
+    margin: 0 auto 28px;
+    padding: 96px 96px 96px 144px;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Courier 10 Pitch", "Courier Prime", "Courier New", monospace;
+    font-size: 16px;
+    line-height: 1.2;
+    -webkit-font-smoothing: antialiased;
+    text-shadow: 0 0 .6px rgba(29, 28, 26, .55);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .5) inset, 0 24px 60px rgba(0, 0, 0, .55);
+  }
+  .sheet .pg { position: absolute; top: 48px; right: 96px; }
+  .sheet p, .sheet h2, .sheet figure, .sheet .cue, .sheet .paren, .sheet .line {
+    margin: 0 0 1.2em;
+    max-width: 60ch;
+  }
+  .sheet h2 { font: inherit; text-transform: uppercase; }
+  .sheet .cue { margin: 0 0 0 36.6%; text-transform: uppercase; }
+  .sheet .paren { margin: 0 0 0 26.6%; max-width: 40%; }
+  .sheet .line { margin: 0 0 1.2em 16.6%; max-width: 58.3%; }
+  .sheet .to { text-align: right; text-transform: uppercase; }
+  .sheet .center { text-align: center; }
+  .sheet figure {
+    max-width: none;
+    margin: 0 -48px 1.2em -96px;
+  }
+  .sheet figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, .25);
+  }
+  .sheet figcaption { margin-top: .6em; color: var(--ink-soft); }
+  /* Close-ups of typed paper, so no frame: they are the page. */
+  .sheet .ribbons img { box-shadow: none; margin: -.2em 0 1.2em; }
+  .sheet .ribbons p { margin: 0 0 0 96px; color: var(--ink-soft); }
+  .sheet .strike {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1.5px solid var(--ink);
+    padding: .35em .9em .3em;
+    cursor: pointer;
+  }
+  .sheet .strike:hover { background: var(--ink); color: var(--paper); }
+  .sheet .end {
+    display: inline-block;
+    margin-top: .4em;
+    padding: .5em 1.1em .45em;
+    color: var(--paper);
+    background: var(--ink);
+    text-decoration: none;
+  }
+  .sheet .end:hover { background: var(--vga-blue); }
+  .sheet .u { text-decoration: underline; text-underline-offset: 3px; }
+
+  footer {
+    max-width: 816px;
+    margin: 0 auto;
+    padding: 0 16px 48px;
+    color: #77778a;
+    font-size: 16px;
+    line-height: 1.6;
+    text-align: center;
+  }
+  footer a { color: var(--vga-grey); }
+
+  @media (max-width: 760px) {
+    .sheet { padding: 64px 24px 56px 32px; font-size: 15px; }
+    .sheet .pg { top: 28px; right: 24px; }
+    .sheet figure { margin: 0 -12px 1.2em -20px; }
+    .sheet .cue { margin-left: 30%; }
+    .sheet .paren { margin-left: 20%; max-width: 60%; }
+    .sheet .line { margin-left: 10%; max-width: 80%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .grid .caret { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="room">
+  <h1 class="sr-only">Lone Typist, a distraction-free writer for the Mac</h1>
+  <p class="sr-only">Lone Typist is a writing app for the Mac that is a DOS screen.
+    One document, eighty columns, nothing else. New in 1.1: write screenplays and
+    print them like they came off a typewriter.</p>
+
+  <div class="tube" id="tube">
+    <div class="grid" id="grid" aria-hidden="true"></div>
+    <button class="sound" id="sound" type="button" aria-pressed="false">Sound: Off</button>
+    <textarea class="kbd" id="kbd" aria-label="Type on the Lone Typist screen"
+      autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  </div>
+
+  <p class="pitch">A writing app for the Mac that is a DOS screen. One document,
+    eighty columns, nothing else. Now with screenplays that print like they
+    came off a typewriter.</p>
+
+  <div class="buy">
+    <a class="store" href="https://apps.apple.com/us/app/lone-typist/id6812835160">Get it on the Mac App Store</a>
+    <p class="fine">$3.99, for macOS 11 or later</p>
+  </div>
+</header>
+
+<main class="desk">
+
+  <article class="sheet" aria-label="Page one">
+    <p>FADE IN:</p>
+    <h2>Int. your desk - 2:47 a.m.</h2>
+    <p>A WRITER sits before a word processor with four toolbars, a sidebar, a word-count goal and a small red badge that keeps coming back.</p>
+    <p>Somewhere in the middle of all that, a cursor blinks. The page is the smallest thing on the screen.</p>
+    <p class="cue">Writer</p>
+    <p class="paren">(to no one)</p>
+    <p class="line">I just want to write.</p>
+    <p>The Writer opens LONE TYPIST. The screen goes blue. Eighty columns of white text, a status line, a blinking cursor. Nothing else.</p>
+    <figure>
+      <img src="/shots/screen-prose.webp" width="1080" height="810" loading="lazy"
+        alt="Lone Typist full screen: grey text on a blue 80-column screen, a status line along the bottom">
+    </figure>
+    <p>One document fills the screen. The menus wait behind a key and show their shortcuts while they teach them. Files are plain text, saved where you put them.</p>
+    <p class="to">Cut to:</p>
+  </article>
+
+  <article class="sheet" aria-label="Page two">
+    <span class="pg">2.</span>
+    <h2>Int. the screenplay - continuous</h2>
+    <p>The Writer types a scene heading. It snaps to capitals. Enter, and the next line is ready for action. A name on its own line becomes a character cue; Enter again, and the dialogue tucks in beneath it.</p>
+    <p>Tab turns a blank line into a character, a transition or a scene heading. Names the script already knows finish themselves.</p>
+    <p class="cue">Writer</p>
+    <p class="line">It's formatting itself.</p>
+    <figure>
+      <img src="/shots/screen-script.webp" width="1080" height="810" loading="lazy"
+        alt="A screenplay on the Lone Typist screen: scene headings, action, and centred character names with dialogue beneath">
+    </figure>
+    <p>The screen shows the page exactly as it will print: the same indents, the same line breaks, the same page breaks, with (MORE) and (CONT'D) where they belong. Go to Scene jumps anywhere in the script, and the page count on the status line is the page count on paper.</p>
+    <p class="to">Cut to:</p>
+  </article>
+
+  <article class="sheet" aria-label="Page three">
+    <span class="pg">3.</span>
+    <h2>Int. the printer - morning</h2>
+    <p>The Writer prints. Out comes a manuscript that looks typed, not printed: Courier 10 Pitch on a ten-to-the-inch grid, every letter struck a little harder or softer than the one before, the ink sitting in the paper.</p>
+    <p>Three ribbons. <span class="u">Fresh</span>, for new-ribbon black. <span class="u">Worn</span>, for a draft that has been through some things. <span class="u">Clean</span>, crisp and even, for contests and agents.</p>
+    <figure class="ribbons">
+      <p>Fresh ribbon:</p>
+      <img src="/shots/ribbon-fresh.webp" width="1200" height="222" loading="lazy"
+        alt="Are you the one who answers the radio, typed with the fresh ribbon: dark, even ink">
+      <p>Worn ribbon:</p>
+      <img src="/shots/ribbon-worn.webp" width="1200" height="222" loading="lazy"
+        alt="The same line with the worn ribbon: greyer, with some letters starved of ink">
+      <p>Clean ribbon:</p>
+      <img src="/shots/ribbon-clean.webp" width="1200" height="222" loading="lazy"
+        alt="The same line with the clean ribbon: crisp, uniform black">
+    </figure>
+    <p>The Writer holds the page up to the light.</p>
+    <p class="cue">Writer</p>
+    <p class="paren">(beat)</p>
+    <p class="line">Huh.</p>
+  </article>
+
+  <article class="sheet" aria-label="Page four">
+    <span class="pg">4.</span>
+    <h2>Int. the same desk - that night</h2>
+    <p>The Writer turns on Typewriter Sounds. Every key strikes like a manual typewriter, recorded from the real machine. The carriage returns. Near the margin, a bell.</p>
+    <p><button class="strike" id="strike" type="button">Hear a few keys</button></p>
+    <h2>Ext. everywhere else - day</h2>
+    <p>Everything stays a plain text file. Screenplays are Fountain, which other screenwriting apps open. There is no account, nothing to sync, and the app never connects to the internet. What you write stays on your Mac.</p>
+    <p class="cue">Writer (V.O.)</p>
+    <p class="line">One document. One screen.</p>
+    <p class="to">Fade out.</p>
+    <p class="center">THE END</p>
+    <p class="center">
+      <a class="end" href="https://apps.apple.com/us/app/lone-typist/id6812835160">Get Lone Typist on the Mac App Store</a>
+    </p>
+  </article>
+
+</main>
+
+<footer>
+  <p><a href="https://srhise.github.io/lonetypist/privacy.html">Privacy</a> &nbsp;&nbsp;
+     <a href="https://github.com/srhise/lonetypist">Source on GitHub</a> &nbsp;&nbsp;
+     <a href="mailto:sean@craftedup.com">Support</a></p>
+  <p>Screen font from <a href="https://int10h.org/oldschool-pc-fonts/">The Ultimate Oldschool PC Font Pack</a> (CC BY-SA 4.0).
+     Courier 10 Pitch by Bitstream (<a href="/fonts/COURIER10-COPYING.txt">notice</a>).
+     Typewriter recordings by Joseph Sardin, CC0.</p>
+</footer>
+
+<script>
+(() => {
+  const COLS = 80, ROWS = 25, LEFT = 7, WIDTH = 66, BODY = ROWS - 3;
+  const grid = document.getElementById('grid');
+  const tube = document.getElementById('tube');
+  const kbd = document.getElementById('kbd');
+  const soundBtn = document.getElementById('sound');
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const INTRO =
+    "Lone Typist is a writing app for the Mac that is a DOS screen.\n\n" +
+    "One document. Eighty columns. No windows, no sidebar, no " +
+    "notifications. Just the page, and a cursor waiting for you.\n\n" +
+    "New in 1.1: write screenplays, and print them like they came " +
+    "off a typewriter.\n\n" +
+    "Go on, type something.\n\n";
+
+  let doc = '';
+  let typing = true;
+
+  // ---- sound: the app's own recordings, varied strike to strike ----
+  let ctx = null, clips = null, soundOn = false, strikes = 0;
+  async function loadSounds() {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    if (clips) return;
+    const names = [1, 2, 3, 4, 5, 6, 7, 8].map(n => `key-${n}`).concat(['return', 'bell']);
+    const bufs = await Promise.all(names.map(n =>
+      fetch(`/sounds/${n}.wav`).then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b))));
+    clips = { keys: bufs.slice(0, 8), ret: bufs[8], bell: bufs[9] };
+  }
+  let lastKey = -1;
+  function play(kind) {
+    if (!soundOn || !clips) return;
+    strikes++;
+    let buf, rate = 1, level = .8;
+    if (kind === 'key') {
+      let i = Math.floor(Math.random() * 8);
+      if (i === lastKey) i = (i + 1) % 8;
+      lastKey = i;
+      buf = clips.keys[i];
+      rate = 1 + (Math.random() * 2 - 1) * .035;
+      level = .9 + (Math.random() * 2 - 1) * .12;
+    } else if (kind === 'return') buf = clips.ret;
+    else { buf = clips.bell; level = .5; }
+    const src = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    gain.gain.value = .45 * level;
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+  }
+  async function setSound(on) {
+    soundOn = on;
+    soundBtn.setAttribute('aria-pressed', String(on));
+    soundBtn.textContent = on ? 'Sound: On ' : 'Sound: Off';
+    if (on) { await loadSounds(); ctx.resume(); }
+  }
+  soundBtn.addEventListener('click', e => { e.stopPropagation(); setSound(!soundOn); });
+
+  // ---- layout: greedy word wrap, the caret always at the end ----
+  function wrap(text) {
+    const lines = [];
+    for (const para of text.split('\n')) {
+      let line = '';
+      for (const word of para.split(/(?<= )/)) {
+        if ((line + word).trimEnd().length > WIDTH && line) {
+          lines.push(line);
+          line = word;
+        } else line += word;
+        while (line.trimEnd().length > WIDTH) { lines.push(line.slice(0, WIDTH)); line = line.slice(WIDTH); }
+      }
+      lines.push(line);
+    }
+    return lines;
+  }
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const pad = (s, n) => (s + ' '.repeat(n)).slice(0, n);
+
+  function paint() {
+    const lines = wrap(doc);
+    const first = Math.max(0, lines.length - BODY);
+    const rows = [];
+    rows.push(`<div class="row bar"> <span class="hot">File</span>  Edit  View  Tools  Help${' '.repeat(COLS - 30)}</div>`, '<div class="row"></div>');
+    for (let r = 0; r < BODY; r++) {
+      const i = first + r;
+      if (i >= lines.length) { rows.push('<div class="row"></div>'); continue; }
+      let text = ' '.repeat(LEFT) + esc(lines[i]);
+      if (i === lines.length - 1) text += '<span class="caret"></span>';
+      // The opening line, the app's name, is in bright white.
+      const cls = i === 0 && doc.startsWith('Lone Typist') ? 'row bright' : 'row';
+      rows.push(`<div class="${cls}">${text}</div>`);
+    }
+    const ln = 1 + (lines.length - 1) / 6;
+    const pos = 1 + (lines[lines.length - 1].length) / 10;
+    const right = `Doc 1  Pg 1  Ln ${ln.toFixed(1)}"  Pos ${pos.toFixed(1)}"`;
+    const left = 'C:\\LONETYP\\HELLO.TXT';
+    rows.push(`<div class="row status">${pad(left, COLS - right.length - 1)}${right}</div>`);
+    grid.innerHTML = rows.join('');
+  }
+
+  function fit() {
+    const w = tube.clientWidth, h = tube.clientHeight;
+    grid.style.transform = `scale(${w / 720}, ${h / 400})`;
+    soundBtn.style.transform = `scale(${w / 720}, ${h / 400})`;
+  }
+  new ResizeObserver(fit).observe(tube);
+
+  // ---- typing ----
+  function insert(ch) {
+    if (doc.length > 4000) return;
+    const lines = wrap(doc);
+    const col = lines[lines.length - 1].length;
+    doc += ch;
+    if (ch === '\n') play('return');
+    else {
+      play('key');
+      if (col + 1 === WIDTH - 7) play('bell');
+    }
+  }
+  function finishIntro() {
+    if (!typing) return;
+    typing = false;
+    doc = INTRO;
+    paint();
+  }
+
+  kbd.addEventListener('keydown', e => {
+    if (e.key === 'F9') { e.preventDefault(); setSound(!soundOn); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    finishIntro();
+    if (e.key === 'Backspace') { doc = doc.slice(0, -1); play('key'); }
+    else if (e.key === 'Enter') insert('\n');
+    else if (e.key === 'Tab') { e.preventDefault(); return; }
+    else if (e.key.length === 1) insert(e.key);
+    else return;
+    e.preventDefault();
+    paint();
+  });
+  // Phones send their letters here rather than as key events.
+  kbd.addEventListener('input', () => {
+    finishIntro();
+    for (const ch of kbd.value) insert(ch === '\r' ? '\n' : ch);
+    kbd.value = '';
+    paint();
+  });
+  tube.addEventListener('click', () => kbd.focus({ preventScroll: true }));
+
+  // ---- the intro types itself ----
+  async function intro() {
+    if (still) { finishIntro(); return; }
+    await document.fonts.ready;
+    for (const ch of INTRO) {
+      if (!typing) return;
+      insert(ch);
+      paint();
+      const pause = ch === '\n' ? 260 : /[.,:]/.test(ch) ? 180 : 28 + Math.random() * 46;
+      await new Promise(r => setTimeout(r, pause));
+    }
+    typing = false;
+  }
+
+  // ---- the paper's sound button ----
+  document.getElementById('strike').addEventListener('click', async () => {
+    if (!soundOn) await setSound(true);
+    const line = 'The quick brown fox';
+    for (let i = 0; i < line.length; i++) {
+      setTimeout(() => play('key'), i * (85 + Math.random() * 60));
+    }
+    setTimeout(() => play('bell'), line.length * 110 + 120);
+    setTimeout(() => play('return'), line.length * 110 + 700);
+  });
+
+  paint();
+  fit();
+  intro();
+})();
+</script>
+</body>
+</html>

@@ -86,7 +86,7 @@ fn random_command_sequences_never_panic() {
             // is exercised in the middle of arbitrary sequences.
             if rng.below(40) == 0 {
                 app.open_field(
-                    crate::input::Purpose::SaveAs,
+                    crate::input::Purpose::Retrieve,
                     "Save Document",
                     "Filename:",
                     "seed.txt",

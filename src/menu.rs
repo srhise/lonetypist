@@ -40,6 +40,7 @@ static FILE_ITEMS: &[Item] = &[
     item("Save", "Cmd-S", Command::Save),
     item("Save As...", "F10", Command::SaveAs),
     item("New", "Cmd-N", Command::New),
+    item("Draft Screenplay", "Cmd-Shft-N", Command::NewScreenplay),
     sep(),
     item("Print...", "Shft-F7", Command::Print),
     sep(),
@@ -62,9 +63,17 @@ static VIEW_ITEMS: &[Item] = &[
     item("Screen Mode", "F5", Command::ToggleDenseMode),
     item("Status Line", "F4", Command::ToggleStatusLine),
     item("Full Screen", "F11", Command::ToggleFullscreen),
+    item("Typewriter Sounds", "F9", Command::ToggleSounds),
+    sep(),
+    item("Mode: Screenplay", "F8", Command::ToggleScreenplay),
 ];
 
-static TOOLS_ITEMS: &[Item] = &[item("Word Count", "F6", Command::ShowWordCount)];
+static TOOLS_ITEMS: &[Item] = &[
+    item("Word Count", "F6", Command::ShowWordCount),
+    sep(),
+    item("Go to Scene", "Cmd-G", Command::SceneList),
+    item("Title Page...", "", Command::TitlePage),
+];
 
 static HELP_ITEMS: &[Item] = &[item("Help", "Shft-F1", Command::ToggleHelp)];
 

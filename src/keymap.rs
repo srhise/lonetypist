@@ -56,6 +56,16 @@ pub enum Command {
     ShowWordCount,
     ToggleFullscreen,
     Dismiss,
+    /// A new document in screenplay mode.
+    NewScreenplay,
+    /// Switch the open document between prose and screenplay.
+    ToggleScreenplay,
+    /// The list of scene headings, to jump between them.
+    SceneList,
+    /// Edit the screenplay's title page.
+    TitlePage,
+    /// Typewriter sounds on or off.
+    ToggleSounds,
 }
 
 pub fn resolve(event: &KeyEvent, mods: &Modifiers) -> Option<Command> {
@@ -84,7 +94,9 @@ pub fn resolve(event: &KeyEvent, mods: &Modifiers) -> Option<Command> {
                 "s" if shift => Some(Command::SaveAs),
                 "s" => Some(Command::Save),
                 "o" => Some(Command::Open),
+                "n" if shift => Some(Command::NewScreenplay),
                 "n" => Some(Command::New),
+                "g" => Some(Command::SceneList),
                 "p" => Some(Command::Print),
                 "q" => Some(Command::Quit),
                 _ => None,
@@ -136,6 +148,8 @@ pub fn resolve(event: &KeyEvent, mods: &Modifiers) -> Option<Command> {
         Key::Named(NamedKey::F4) => Some(Command::ToggleStatusLine),
         Key::Named(NamedKey::F5) => Some(Command::ToggleDenseMode),
         Key::Named(NamedKey::F6) => Some(Command::ShowWordCount),
+        Key::Named(NamedKey::F8) => Some(Command::ToggleScreenplay),
+        Key::Named(NamedKey::F9) => Some(Command::ToggleSounds),
         Key::Named(NamedKey::F11) => Some(Command::ToggleFullscreen),
 
         Key::Character(text) => Some(Command::Insert(text.to_string())),

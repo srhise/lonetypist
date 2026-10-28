@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::typewriter::Ribbon;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -19,6 +21,10 @@ pub struct Config {
     pub recent: Option<PathBuf>,
     /// Where bare filenames land. Defaults to ~/Documents.
     pub base_dir: Option<PathBuf>,
+    /// How a screenplay's typewriter strikes when it prints.
+    pub ribbon: Ribbon,
+    /// Typewriter sounds as you type. Off unless asked for.
+    pub sounds: bool,
 }
 
 impl Default for Config {
@@ -31,6 +37,8 @@ impl Default for Config {
             window: (1080, 810),
             recent: None,
             base_dir: None,
+            ribbon: Ribbon::default(),
+            sounds: false,
         }
     }
 }
@@ -144,8 +152,11 @@ mod tests {
     fn the_old_folder_moves_to_the_new_name() {
         let root = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(root.path().join(OLD_DIR_NAME).join("backup")).expect("mkdir");
-        fs::write(root.path().join(OLD_DIR_NAME).join("config.toml"), "dense = true\n")
-            .expect("write");
+        fs::write(
+            root.path().join(OLD_DIR_NAME).join("config.toml"),
+            "dense = true\n",
+        )
+        .expect("write");
 
         migrate_in(root.path());
 
@@ -161,8 +172,11 @@ mod tests {
     fn an_empty_new_folder_does_not_block_the_move() {
         let root = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(root.path().join(OLD_DIR_NAME).join("backup")).expect("mkdir");
-        fs::write(root.path().join(OLD_DIR_NAME).join("config.toml"), "dense = true\n")
-            .expect("write");
+        fs::write(
+            root.path().join(OLD_DIR_NAME).join("config.toml"),
+            "dense = true\n",
+        )
+        .expect("write");
         // The shape that actually happened: the new folder exists, empty.
         fs::create_dir_all(root.path().join(DIR_NAME)).expect("mkdir");
 
@@ -185,7 +199,10 @@ mod tests {
 
         migrate_in(root.path());
 
-        assert!(root.path().join(OLD_DIR_NAME).is_dir(), "old folder left alone");
+        assert!(
+            root.path().join(OLD_DIR_NAME).is_dir(),
+            "old folder left alone"
+        );
         assert_eq!(
             fs::read_to_string(root.path().join(DIR_NAME).join("config.toml")).expect("read"),
             "new"

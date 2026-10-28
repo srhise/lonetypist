@@ -19,3 +19,21 @@ authorship beyond the design. The protection that does attach to fonts
 covers scalable font *programs* -- the hinting and outline code -- which a
 1987 character generator has none of. These particular ROMs have been
 redistributed for decades in emulators and terminal software.
+
+## Courier 10 Pitch
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `Courier10PitchBT-Roman.otf` | 25388 | `d2e693ffb70a47a23456f386c60f6051ad6362b311efcb96c239a62f851e841a` |
+
+Bitstream's Courier 10 Pitch, the IBM typewriter Courier, from the CTAN
+`courierten` package (https://ctan.org/pkg/courierten), which converts
+Bitstream's Type 1 release to OpenType. Screenplays print in it: the PDF
+embeds the font's CFF outlines.
+
+Bitstream's 1989-1992 notice, in `COURIER10-COPYING`, grants use,
+copying, modification, sublicensing, sale and redistribution of the
+Courier Type 1 fonts "for any purpose and without restriction",
+provided the notice is left intact on all copies. It is kept here
+beside the font and copied into the app bundle's Resources by both
+packaging scripts.

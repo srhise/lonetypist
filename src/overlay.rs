@@ -1,6 +1,6 @@
 //! Modal boxes drawn in the CP437 double-line style.
 
-use crate::input::Input;
+use crate::input::{Form, Input};
 use crate::menu::MenuState;
 use crate::vga::Screen;
 
@@ -20,6 +20,7 @@ pub enum Prompt {
     QuitUnsaved,
     NewUnsaved,
     OpenUnsaved,
+    NewScreenplayUnsaved,
     Recover,
 }
 
@@ -47,6 +48,12 @@ pub enum Overlay {
         /// The default printer, or `None` when the system has none.
         printer: Option<String>,
     },
+    /// Tools > Go to Scene: every heading, with the one highlighted.
+    Scenes {
+        selected: usize,
+    },
+    /// Tools > Title Page.
+    TitlePage(Form),
 }
 
 /// Draw a framed, filled box. Coordinates are the outer rectangle.

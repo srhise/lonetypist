@@ -39,7 +39,7 @@ Needs a Rust toolchain. Nothing else.
 
 ```sh
 cargo run                 # run it
-cargo test                # 272 tests, all headless
+cargo test                # 347 tests, all headless
 ./tools/package.sh        # build "target/Lone Typist.app"
 ./tools/release.sh        # sign, notarize, draft a GitHub release
 ./tools/asc-bootstrap.sh  # certificates and profile, via the API
@@ -81,6 +81,7 @@ teaches the shortcuts and then you stop needing it.
 │ Save                 Cmd-S │
 │ Save As...             F10 │
 │ New                  Cmd-N │
+│ Draft Screenplay Cmd-Shft-N│
 ├────────────────────────────┤
 │ Print...           Shft-F7 │
 ├────────────────────────────┤
@@ -90,18 +91,19 @@ teaches the shortcuts and then you stop needing it.
 
 ## Naming
 
-It opens by asking what you are about to write. `Enter` names the
-document, `Esc` skips straight to an untitled buffer — the prompt never
-stands between you and a sudden idea.
+It opens on a blank, untitled draft: nothing to answer before the first
+word. The document reaches disk the first time you save it.
 
-A bare `chapter-one.txt` lands in the base directory (`~/Documents`
-unless `base_dir` says otherwise in `config.toml`); anything containing
-`/` or `~` is read as a path, the way a shell would. Naming at launch
-only sets the destination — the file appears on the first save.
+Saving something new -- `Cmd-S` on an untitled draft, or `F10` / `Cmd-Shift-S`
+(Save As) any time -- opens the macOS save panel beside the current
+file, or in your writing folder, with the current name filled in.
+Naming a draft `.fountain` makes it a screenplay.
 
-`F10` (Save As) and `Shift-F10` (Retrieve) use the same in-world box.
-`Cmd-O` keeps the native macOS panel, because typing a path is a poor
-way to *browse*.
+`Shift-F10` (Retrieve) is the in-world way in: type a name and a bare
+`chapter-one.txt` comes from the base directory (`~/Documents` unless
+`base_dir` says otherwise in `config.toml`), while anything containing
+`/` or `~` is read as a path, the way a shell would. `Cmd-O` is the
+native panel, for browsing.
 
 ## Printing
 
@@ -131,6 +133,66 @@ geometry the status line reports, so `Pg 3` on screen is page 3 on
 paper. It goes to the system default printer through `lpr`. `3` writes
 exactly what the printer would have received to a `.prn` file instead.
 
+## Screenplays
+
+`Cmd-Shift-N` (File > Draft Screenplay) starts one; any `.fountain`
+file opens as one; `F8` switches the open document either way. The file
+is [Fountain](https://fountain.io), plain text that Highland, Fade In,
+Beat and WriterDuet all read, so nothing is locked in here either.
+
+Screenplay format was made on the typewriter, at the same 10
+characters and 6 lines to the inch this screen already runs on. So the
+screen does not approximate the page: paper column *c* is screen
+column *c* − 5, and every element sits where it will be typed.
+
+```
+          INT. FBI BASEMENT OFFICE - NIGHT
+
+          A single desk lamp. Files stacked to the ceiling.
+
+                                REYES
+                          (not looking up)
+                    You're late. The tape's already
+                    rolling.
+
+                                                      CUT TO:
+```
+
+| On | Enter gives | Tab gives |
+|---|---|---|
+| an empty line | a new line | cue, then transition, then heading |
+| a scene heading | a blank line, then action | |
+| action | a blank line, then action; capitals become a cue | |
+| a cue | its dialogue | `(` a parenthetical `)` |
+| dialogue | a blank line, then action | `(` a parenthetical `)` |
+
+Headings, cues and transitions capitalise as you type. Cues complete
+from names already in the script, headings from its places and times;
+the suggestion is dim after the caret, and `Tab` or `→` takes it.
+`Cmd-G` lists every scene with its page. Tools > Title Page fills in the
+title page.
+
+Pages break the way a typist broke them: no heading stranded at the
+foot of a page, action split only at a sentence with two lines either
+side, a speech split only between sentences with `(MORE)` under it and
+`NAME (CONT'D)` over the rest. The screen draws each break as a rule
+with the page number, and shows the `(MORE)` where it will print. The
+status line reads `Dialogue   Sc 12   Pg 34/97`.
+
+A screenplay prints as a PDF typed in Courier 10 Pitch, IBM's
+typewriter face. No two strikes are alike: each lands a hair off the
+grid, the ink density wanders, a fabric ribbon leaves its weave in the
+letters, and every key has its own habits, so every `e` on the page
+leans the same way. Italic and underline overstrike an underscore and
+bold strikes twice, as a typewriter had to. `R` on the print screen
+picks the ribbon: **Fresh**, **Worn**, or **Clean**, plain black type
+for contest and agency submissions. The variance is seeded by
+position, so a script prints the same way twice.
+
+```sh
+cargo test dump_sample_pdf -- --ignored   # target/screenplay-*.pdf
+```
+
 ## Keys
 
 DOS look, modern muscle memory.
@@ -140,7 +202,8 @@ DOS look, modern muscle memory.
 | `F1` or `Esc` (or `Alt-=`) | Menu bar |
 | `Shift-F1` | Help |
 | `Cmd-N` / `Cmd-O` / `Cmd-S` | New, browse-open, save |
-| `F10` / `Shift-F10` | Save As, Retrieve (typed name) |
+| `F10` / `Cmd-Shift-S` | Save As (the save panel) |
+| `Shift-F10` | Retrieve (typed name) |
 | `F7` | Exit |
 | `Shift-F7` / `Cmd-P` | Print |
 | `Cmd-Z` / `Cmd-Shift-Z` | Undo, redo — one word at a time |
@@ -151,8 +214,17 @@ DOS look, modern muscle memory.
 | `F3` | CRT effects on/off |
 | `F5` | 80×25 / 80×50 |
 | `F6` | Word count |
+| `F8` | Screenplay / prose |
+| `F9` | Typewriter sounds on/off |
 | `F11` | Fullscreen |
 | `Esc` | Close any box |
+
+**Typewriter sounds** (`F9`, View > Typewriter Sounds) are off until
+you ask. They are a Hermes Precisa 305: eight different key strikes,
+played a little faster or slower and louder or softer each time so no
+two in a row match, the space bar, the carriage return on `Enter`, and
+the bell seven characters short of the margin. The audio device is only
+opened while they are on.
 
 The mouse places the caret, drags to select, and scrolls. There is no
 permanent F-key hint bar: it would be a second row of chrome you read
@@ -239,6 +311,10 @@ application logic tests headless.
 |---|---|
 | `src/editor.rs` | Text buffer, cursor, selection, undo |
 | `src/wrap.rs` | Soft wrap; offset ↔ (line, column) |
+| `src/fountain.rs` | Which screenplay element each line is |
+| `src/script.rs` | Screenplay geometry, pagination, screen rows |
+| `src/typewriter.rs` | The typewritten PDF |
+| `src/sound.rs` | Typewriter sounds and their mixer |
 | `src/vga.rs` | Cell grid, palette, framebuffer rasterizer |
 | `src/font.rs` | The embedded ROM fonts |
 | `src/cp437.rs` | Encoding and the input filter |
@@ -262,7 +338,15 @@ Design notes are in `docs/superpowers/`.
 ## Fonts
 
 `assets/fonts/*.bin` are raw character-generator ROM dumps from IBM VGA
-hardware. See `assets/fonts/PROVENANCE.md`.
+hardware. `Courier10PitchBT-Roman.otf` is Bitstream's Courier 10 Pitch,
+which screenplays print in; Bitstream's notice is in
+`assets/fonts/COURIER10-COPYING` and ships inside the app. See
+`assets/fonts/PROVENANCE.md`.
+
+## Sounds
+
+`assets/sounds/*.wav` are cut from Joseph Sardin's CC0 recordings of a
+Hermes Precisa 305 on BigSoundBank. See `assets/sounds/PROVENANCE.md`.
 
 ## License
 

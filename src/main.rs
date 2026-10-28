@@ -5,6 +5,7 @@ mod cp437;
 mod editor;
 mod fileio;
 mod font;
+mod fountain;
 mod input;
 mod keymap;
 mod menu;
@@ -13,11 +14,14 @@ mod paths;
 mod present;
 mod print;
 mod scope;
+mod script;
 #[cfg(test)]
 mod simulate;
+mod sound;
 mod status;
 #[cfg(test)]
 mod stress;
+mod typewriter;
 mod vga;
 mod wrap;
 
@@ -65,6 +69,8 @@ struct Shell {
     recovery: Option<String>,
     last_backup_ms: u64,
     last_fullscreen: bool,
+    /// The audio output, open only while typewriter sounds are on.
+    player: Option<sound::Player>,
 }
 
 impl Shell {
@@ -84,6 +90,7 @@ impl Shell {
             recovery: None,
             last_backup_ms: 0,
             last_fullscreen: false,
+            player: None,
         }
     }
 
@@ -94,6 +101,18 @@ impl Shell {
         let dense = self.state.dense();
         let fullscreen = self.state.fullscreen();
         let status_line = self.state.status_line();
+        let ribbon = self.state.ribbon();
+        let mut sounds = self.state.sounds_on();
+        if sounds && self.player.is_none() {
+            self.player = sound::Player::open();
+            if self.player.is_none() {
+                self.state.set_sounds(false);
+                self.state.notify("No audio output for sounds");
+                sounds = false;
+            }
+        } else if !sounds {
+            self.player = None;
+        }
 
         if fullscreen != self.last_fullscreen {
             if let Some(w) = self.window.as_ref() {
@@ -110,11 +129,15 @@ impl Shell {
             || dense != self.config.dense
             || fullscreen != self.config.fullscreen
             || status_line != self.config.status_line
+            || ribbon != self.config.ribbon
+            || sounds != self.config.sounds
         {
             self.config.effects = effects;
             self.config.dense = dense;
             self.config.fullscreen = fullscreen;
             self.config.status_line = status_line;
+            self.config.ribbon = ribbon;
+            self.config.sounds = sounds;
             config::save(&self.config);
         }
     }
@@ -172,16 +195,13 @@ impl Shell {
 
     fn do_open(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Text", &["txt", "md", "text"])
+            .add_filter("Text", &["txt", "md", "text", "fountain"])
             .pick_file()
         else {
             return;
         };
         match fileio::load(&path) {
-            Ok(loaded) => {
-                self.state.load_text(&loaded.text);
-                self.state.set_path(path, loaded.crlf);
-            }
+            Ok(loaded) => self.take_loaded(path, &loaded),
             Err(e) => self.state.set_overlay(Overlay::Message {
                 title: "Error".to_string(),
                 body: format!("Cannot open file: {e}"),
@@ -191,17 +211,50 @@ impl Shell {
     }
 
     /// Returns whether the document ended up saved.
+    ///
+    /// A document that has never been saved, or Save As, goes through
+    /// the Mac save panel: it opens beside the current file (or in the
+    /// writing folder) with the current name filled in.
     fn do_save(&mut self, force_dialog: bool) -> bool {
         let path = match (self.state.path(), force_dialog) {
             (Some(p), false) => p.to_path_buf(),
-            _ => match rfd::FileDialog::new()
-                .set_file_name("untitled.txt")
-                .save_file()
-            {
-                Some(p) => p,
-                None => return false,
-            },
+            _ => {
+                let name = self
+                    .state
+                    .path()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| {
+                        if self.state.screenplay() {
+                            "untitled.fountain".to_string()
+                        } else {
+                            "untitled.txt".to_string()
+                        }
+                    });
+                let dir = self
+                    .state
+                    .path()
+                    .and_then(|p| p.parent())
+                    .map(|d| d.to_path_buf())
+                    .unwrap_or_else(|| self.base_dir());
+                match rfd::FileDialog::new()
+                    .set_title("Save As")
+                    .set_directory(dir)
+                    .set_file_name(name)
+                    .save_file()
+                {
+                    Some(p) => p,
+                    None => return false,
+                }
+            }
         };
+        // Naming a prose draft .fountain makes it a screenplay.
+        let fountain = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("fountain"));
+        if fountain && !self.state.screenplay() {
+            self.state.set_screenplay(true);
+        }
         let text = self.state.editor().to_string();
         let crlf = self.state.crlf();
         match fileio::save(&path, &text, crlf) {
@@ -287,17 +340,14 @@ impl Shell {
         };
         match purpose {
             Purpose::Retrieve => match fileio::load(&path) {
-                Ok(loaded) => {
-                    self.state.load_text(&loaded.text);
-                    self.state.set_path(path, loaded.crlf);
-                }
+                Ok(loaded) => self.take_loaded(path, &loaded),
                 Err(e) => self.state.set_overlay(Overlay::Message {
                     title: "Error".to_string(),
                     body: format!("Cannot retrieve: {e}"),
                     danger: true,
                 }),
             },
-            Purpose::PrintToFile => match self.state.print_job(Scope::Full) {
+            Purpose::PrintToFile => match self.print_bytes(Scope::Full) {
                 Some(job) => match std::fs::write(&path, job) {
                     Ok(()) => {
                         let shown = status::dos_path(Some(&path), false);
@@ -307,19 +357,52 @@ impl Shell {
                 },
                 None => self.error("Print", "Nothing to print."),
             },
-            Purpose::SaveAs | Purpose::CreateAtLaunch => {
-                // Naming at launch only sets the destination; the file
-                // appears on the first save, as WordPerfect did.
-                self.state.set_path(path, self.state.crlf());
-                if purpose == Purpose::SaveAs {
-                    self.do_save(false);
-                }
-            }
+            Purpose::FormField => {}
         }
     }
 
+    /// A file just read becomes the document. A `.fountain` file is a
+    /// screenplay; anything else is prose.
+    fn take_loaded(&mut self, path: std::path::PathBuf, loaded: &fileio::Loaded) {
+        let fountain = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("fountain"));
+        self.state.set_screenplay(fountain);
+        self.state.load_text(&loaded.text);
+        self.state.set_path(path, loaded.crlf);
+    }
+
+    /// A fresh document that keeps the view the user had: a new App
+    /// starts from defaults, and the settings sync would otherwise save
+    /// those defaults over the user's choices.
+    fn fresh_state(&self) -> app::App {
+        let mut state = app::App::new();
+        state.set_effects(self.state.effects());
+        state.set_dense(self.state.dense());
+        state.set_status_line(self.state.status_line());
+        state.set_fullscreen(self.state.fullscreen());
+        state.set_ribbon(self.state.ribbon());
+        state.set_sounds(self.state.sounds_on());
+        state
+    }
+
     fn do_new(&mut self) {
-        self.state = app::App::new();
+        self.state = self.fresh_state();
+    }
+
+    fn do_new_screenplay(&mut self) {
+        self.state = self.fresh_state();
+        self.state.start_screenplay();
+    }
+
+    /// The job as the printer takes it: plain text for prose, a
+    /// typewritten PDF for a screenplay.
+    fn print_bytes(&self, scope: Scope) -> Option<Vec<u8>> {
+        if self.state.screenplay() {
+            self.state.script_pdf(scope)
+        } else {
+            self.state.print_job(scope).map(String::into_bytes)
+        }
     }
 
     fn error(&mut self, title: &str, body: &str) {
@@ -353,13 +436,18 @@ impl Shell {
     }
 
     /// The name a printed-to-disk job gets: the document's name with a
-    /// .PRN extension, or UNTITLED.PRN.
+    /// .PRN extension, or UNTITLED.PRN. A screenplay prints to a PDF.
     fn prn_name(&self) -> String {
+        let ext = if self.state.screenplay() {
+            "pdf"
+        } else {
+            "prn"
+        };
         self.state
             .path()
             .and_then(|p| p.file_stem())
-            .map(|n| format!("{}.prn", n.to_string_lossy()))
-            .unwrap_or_else(|| "untitled.prn".to_string())
+            .map(|n| format!("{}.{ext}", n.to_string_lossy()))
+            .unwrap_or_else(|| format!("untitled.{ext}"))
     }
 
     /// Carry out what the print screen asked for. A printer job goes
@@ -378,7 +466,7 @@ impl Shell {
             }
             Request::Printer(scope) => scope,
         };
-        let Some(job) = self.state.print_job(scope) else {
+        let Some(job) = self.print_bytes(scope) else {
             self.error("Print", "Nothing to print.");
             return;
         };
@@ -386,10 +474,22 @@ impl Shell {
             Scope::Full => self.state.page_count(),
             Scope::Page(_) => 1,
         };
-        let title = self.prn_name().trim_end_matches(".prn").to_string();
+        let title = self
+            .prn_name()
+            .trim_end_matches(".prn")
+            .trim_end_matches(".pdf")
+            .to_string();
+        // Text is set at 10 cpi and 6 lpi by CUPS; a PDF carries its own
+        // geometry and must print at its own size.
+        let options: &[&str] = if self.state.screenplay() {
+            &["-o", "print-scaling=none", "-o", "media=Letter"]
+        } else {
+            &["-o", "cpi=10", "-o", "lpi=6"]
+        };
 
         let spawned = Proc::new("lpr")
-            .args(["-o", "cpi=10", "-o", "lpi=6", "-T", &title])
+            .args(options)
+            .args(["-T", &title])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -402,7 +502,7 @@ impl Shell {
             }
         };
         if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(job.as_bytes());
+            let _ = stdin.write_all(&job);
         }
         match child.wait_with_output() {
             Ok(out) if out.status.success() => {
@@ -447,6 +547,12 @@ impl Shell {
                 }
             }
             (Prompt::NewUnsaved, false) => self.do_new(),
+            (Prompt::NewScreenplayUnsaved, true) => {
+                if self.do_save(false) {
+                    self.do_new_screenplay();
+                }
+            }
+            (Prompt::NewScreenplayUnsaved, false) => self.do_new_screenplay(),
             (Prompt::OpenUnsaved, true) => {
                 if self.do_save(false) {
                     self.do_open();
@@ -523,20 +629,25 @@ impl Shell {
                 self.request_redraw();
                 return;
             }
+            Command::NewScreenplay => {
+                if self.state.editor().is_dirty() {
+                    self.state.confirm(
+                        Prompt::NewScreenplayUnsaved,
+                        "Save changes to this document? (Y/N)",
+                    );
+                } else {
+                    self.do_new_screenplay();
+                }
+                self.request_redraw();
+                return;
+            }
             Command::Save => {
                 self.do_save(false);
                 self.request_redraw();
                 return;
             }
             Command::SaveAs => {
-                let seed = self
-                    .state
-                    .path()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                self.state
-                    .open_field(Purpose::SaveAs, "Save Document", "Filename:", &seed);
+                self.do_save(true);
                 self.request_redraw();
                 return;
             }
@@ -574,6 +685,12 @@ impl Shell {
             return;
         }
         self.sync_settings();
+        let sounds = self.state.take_sounds();
+        if let Some(player) = self.player.as_mut() {
+            for s in sounds {
+                player.play(s);
+            }
+        }
         self.request_redraw();
     }
 
@@ -613,6 +730,8 @@ impl ApplicationHandler for Shell {
         self.state.set_effects(self.config.effects);
         self.state.set_dense(self.config.dense);
         self.state.set_status_line(self.config.status_line);
+        self.state.set_ribbon(self.config.ribbon);
+        self.state.set_sounds(self.config.sounds);
 
         let (cw, ch) = self.config.window;
         let attrs = Window::default_attributes()
@@ -653,14 +772,8 @@ impl ApplicationHandler for Shell {
         // user says where their writing lives.
         self.ensure_writing_folder();
 
-        // Ask what is being written before anything else -- Esc skips
-        // straight to an untitled buffer.
-        self.state.open_field(
-            Purpose::CreateAtLaunch,
-            "New Document",
-            "Document to be created:",
-            "",
-        );
+        // The app opens on a blank, untitled draft: nothing to answer
+        // before the first word. It reaches disk on the first save.
 
         // A backup that outlived its document means the last session did
         // not end cleanly.

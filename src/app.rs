@@ -6,12 +6,16 @@ use std::path::PathBuf;
 use crate::cp437;
 use crate::editor::Editor;
 use crate::fileio::TAB_STOP;
-use crate::input::{Input, Purpose};
+use crate::fountain::{self, Caret, Element};
+use crate::input::{Form, Input, Purpose};
 use crate::keymap::{Command, Motion};
 use crate::menu::{self, MenuState};
 use crate::overlay::{self, Overlay, Prompt};
 use crate::print::{self, Request, Scope};
+use crate::script::{self, Layout, Row};
+use crate::sound::Sound;
 use crate::status;
+use crate::typewriter::{self, Ribbon, Sheet};
 use crate::vga::{Mode, Screen};
 use crate::wrap::{self, VisualLine};
 
@@ -21,6 +25,27 @@ const FG: u8 = 7;
 /// around the picture in it, so the blue runs to the window's edge.
 pub const BG: u8 = 1;
 const STATUS_FG: u8 = 15;
+/// Scene headings stand out, as WordPerfect showed codes in their own
+/// colour.
+const HEADING_FG: u8 = 15;
+/// What is on the page but not in the text -- the page rule, (MORE),
+/// (CONT'D) -- and what completion offers but you have not typed.
+const DIM_FG: u8 = 8;
+/// Notes, sections and the boneyard: in the file, never on paper.
+const NOTE_FG: u8 = 3;
+
+/// A new screenplay opens on the first words of every screenplay.
+const SCREENPLAY_SEED: &str = "FADE IN:\n\n";
+
+/// The title page fields, in the order the form shows them.
+const TITLE_FIELDS: &[(&str, &str)] = &[
+    ("title", "Title"),
+    ("credit", "Credit"),
+    ("author", "Author"),
+    ("source", "Source"),
+    ("draft date", "Draft date"),
+    ("contact", "Contact"),
+];
 /// Columns of clearance at each end of the status line.
 const STATUS_MARGIN: usize = 2;
 
@@ -47,7 +72,12 @@ F3  CRT effects       F5  80x25 / 80x50
 F6  Word count        F11  Fullscreen
 F7  Exit              F10  Save As
 Shft-F7  Print        Shft-F10  Retrieve
-Shft-F1  This help
+F8  Screenplay mode   Cmd-Shift-N  New screenplay
+Shft-F1  This help    F9  Typewriter sounds
+
+In a screenplay
+Enter  Next element   Tab  Cue, transition, heading
+Tab in speech  ( )    Cmd-G  Go to scene
 
 Esc  Close this";
 
@@ -58,8 +88,21 @@ pub struct App {
     crlf: bool,
     /// First visual line shown in the viewport.
     viewport_top: usize,
-    /// Cached wrap of the whole document, rebuilt when the text changes.
-    lines: Vec<VisualLine>,
+    /// Cached layout of the whole document, rebuilt when the text
+    /// changes -- and, in a screenplay, when the caret changes line.
+    layout: Layout,
+    /// The caret context the layout was built for.
+    layout_caret: Caret,
+    /// Writing a screenplay rather than prose.
+    screenplay: bool,
+    /// An element chosen with Tab for an empty line, with the offset the
+    /// line starts at. It lasts while the caret stays on that line.
+    pending: Option<(usize, Element)>,
+    /// How the typewriter strikes when a screenplay prints.
+    ribbon: Ribbon,
+    /// Typewriter sounds, and the ones waiting for the shell to play.
+    sounds_on: bool,
+    sounds: Vec<Sound>,
     /// Column the cursor is trying to keep while moving vertically.
     goal_col: Option<usize>,
     /// Last clock reading handed to `paint_at`.
@@ -92,14 +135,20 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         let editor = Editor::new();
-        let lines = wrap::wrap(editor.text(), wrap::TEXT_COLS);
+        let layout = Layout::prose(editor.text());
         Self {
             editor,
             screen: Screen::new(Mode::Text80x25),
             path: None,
             crlf: false,
             viewport_top: 0,
-            lines,
+            layout,
+            layout_caret: Caret::default(),
+            screenplay: false,
+            pending: None,
+            ribbon: Ribbon::default(),
+            sounds_on: false,
+            sounds: Vec::new(),
             goal_col: None,
             now_ms: 0,
             last_input_ms: 0,
@@ -157,25 +206,188 @@ impl App {
         self.editor = Editor::from_str(text);
         self.viewport_top = 0;
         self.goal_col = None;
+        self.pending = None;
         self.reflow();
     }
 
+    /// Start a new screenplay: the seed text, the caret under it.
+    pub fn start_screenplay(&mut self) {
+        self.screenplay = true;
+        self.load_text(SCREENPLAY_SEED);
+        self.editor.set_cursor(self.editor.len(), false);
+        self.reflow();
+    }
+
+    pub fn screenplay(&self) -> bool {
+        self.screenplay
+    }
+
+    pub fn set_screenplay(&mut self, on: bool) {
+        self.screenplay = on;
+        self.pending = None;
+        self.goal_col = None;
+        self.reflow();
+        self.scroll_to_cursor();
+    }
+
+    pub fn ribbon(&self) -> Ribbon {
+        self.ribbon
+    }
+
+    pub fn set_ribbon(&mut self, ribbon: Ribbon) {
+        self.ribbon = ribbon;
+    }
+
+    pub fn sounds_on(&self) -> bool {
+        self.sounds_on
+    }
+
+    pub fn set_sounds(&mut self, on: bool) {
+        self.sounds_on = on;
+        if !on {
+            self.sounds.clear();
+        }
+    }
+
+    /// The sounds the last commands made, for the shell to play.
+    pub fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
+
+    fn sound(&mut self, s: Sound) {
+        if self.sounds_on {
+            self.sounds.push(s);
+        }
+    }
+
+    /// The strike a typed character makes, and the bell when it brings
+    /// the carriage seven characters short of the margin.
+    fn strike(&mut self, typed: &str) {
+        if !self.sounds_on || typed.chars().count() != 1 {
+            return;
+        }
+        self.sound(if typed == " " {
+            Sound::Space
+        } else {
+            Sound::Key
+        });
+        let (line, col) = self.cursor_position();
+        let width = if self.screenplay {
+            let kind = self.layout.kinds.get(line).copied();
+            script::geometry(kind.unwrap_or(Element::Action)).1
+        } else {
+            wrap::TEXT_COLS
+        };
+        if col + 7 == width {
+            self.sound(Sound::Bell);
+        }
+    }
+
     fn reflow(&mut self) {
-        self.lines = wrap::wrap(self.editor.text(), wrap::TEXT_COLS);
+        let caret = if self.screenplay {
+            self.caret()
+        } else {
+            Caret::default()
+        };
+        self.layout = if self.screenplay {
+            Layout::screenplay(self.editor.text(), caret)
+        } else {
+            Layout::prose(self.editor.text())
+        };
+        self.layout_caret = caret;
+    }
+
+    /// The grid column of the text margin.
+    fn left(&self) -> usize {
+        if self.screenplay {
+            script::TEXT_LEFT
+        } else {
+            wrap::TEXT_LEFT
+        }
+    }
+
+    fn lines(&self) -> &[VisualLine] {
+        &self.layout.lines
+    }
+
+    fn indent(&self, line: usize) -> usize {
+        let lines = self.lines();
+        lines
+            .get(line.min(lines.len().saturating_sub(1)))
+            .map_or(0, |l| l.indent)
+    }
+
+    /// The source line the caret is on: its index, start and end.
+    fn caret_source(&self) -> (usize, usize, usize) {
+        let text = self.editor.text();
+        let cursor = self.editor.cursor().min(text.len());
+        let start = text[..cursor]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map_or(0, |i| i + 1);
+        let end = text[cursor..]
+            .iter()
+            .position(|&c| c == '\n')
+            .map_or(text.len(), |i| cursor + i);
+        let index = text[..start].iter().filter(|&&c| c == '\n').count();
+        (index, start, end)
+    }
+
+    fn caret(&self) -> Caret {
+        let (line, start, _) = self.caret_source();
+        Caret {
+            line: Some(line),
+            pending: self
+                .pending
+                .filter(|(at, _)| *at == start)
+                .map(|(_, el)| el),
+        }
+    }
+
+    /// The element under the caret.
+    fn caret_element(&self) -> Element {
+        let (line, _, _) = self.caret_source();
+        self.layout
+            .source_kinds
+            .get(line)
+            .copied()
+            .unwrap_or(Element::Action)
+    }
+
+    /// In a screenplay the caret's line shapes the layout, so moving it
+    /// to another line lays the script out again. A Tab choice is left
+    /// behind with the line it was made on.
+    fn follow_caret(&mut self) {
+        if !self.screenplay {
+            return;
+        }
+        let caret = self.caret();
+        if caret.pending.is_none() {
+            self.pending = None;
+        }
+        if caret != self.layout_caret {
+            self.reflow();
+        }
     }
 
     fn cursor_position(&self) -> (usize, usize) {
-        wrap::position_of(&self.lines, self.editor.cursor())
+        wrap::position_of(self.lines(), self.editor.cursor())
+    }
+
+    /// The screen row, counted over the whole document, the caret is on.
+    fn cursor_row(&self) -> usize {
+        let (line, _) = self.cursor_position();
+        self.layout.row_of_line.get(line).copied().unwrap_or(0)
     }
 
     /// Scroll the minimum distance that puts the cursor back on screen.
     fn scroll_to_cursor(&mut self) {
-        let (line, _) = self.cursor_position();
+        let row = self.cursor_row();
         let rows = self.text_rows();
-        if line < self.viewport_top {
-            self.viewport_top = line;
-        } else if line >= self.viewport_top + rows {
-            self.viewport_top = line + 1 - rows;
+        if row < self.viewport_top {
+            self.viewport_top = row;
+        } else if row >= self.viewport_top + rows {
+            self.viewport_top = row + 1 - rows;
         }
     }
 
@@ -192,36 +404,41 @@ impl App {
         let cursor = self.editor.cursor();
 
         // Vertical motion remembers the column it started from, so a trip
-        // through a short line does not lose your place.
+        // through a short line does not lose your place. The column is
+        // the one on screen, so in a screenplay a move from dialogue to
+        // action keeps its place on the page, not in the line.
         let vertical = matches!(
             motion,
             Motion::Up | Motion::Down | Motion::PageUp | Motion::PageDown
         );
+        let screen_col = self.indent(line) + col;
         let goal = if vertical {
-            let g = self.goal_col.unwrap_or(col);
+            let g = self.goal_col.unwrap_or(screen_col);
             self.goal_col = Some(g);
             g
         } else {
             self.goal_col = None;
-            col
+            screen_col
         };
+        let at = |l: usize| wrap::offset_at(self.lines(), l, goal.saturating_sub(self.indent(l)));
 
         let target = match motion {
             Motion::Left => cursor.saturating_sub(1),
             Motion::Right => (cursor + 1).min(self.editor.len()),
             Motion::WordLeft => self.editor.word_left(),
             Motion::WordRight => self.editor.word_right(),
-            Motion::LineStart => wrap::offset_at(&self.lines, line, 0),
-            Motion::LineEnd => wrap::offset_at(&self.lines, line, usize::MAX),
+            Motion::LineStart => wrap::offset_at(self.lines(), line, 0),
+            Motion::LineEnd => wrap::offset_at(self.lines(), line, usize::MAX),
             Motion::DocStart => 0,
             Motion::DocEnd => self.editor.len(),
-            Motion::Up => wrap::offset_at(&self.lines, line.saturating_sub(1), goal),
-            Motion::Down => wrap::offset_at(&self.lines, line + 1, goal),
-            Motion::PageUp => wrap::offset_at(&self.lines, line.saturating_sub(rows), goal),
-            Motion::PageDown => wrap::offset_at(&self.lines, line + rows, goal),
+            Motion::Up => at(line.saturating_sub(1)),
+            Motion::Down => at(line + 1),
+            Motion::PageUp => at(line.saturating_sub(rows)),
+            Motion::PageDown => at(line + rows),
         };
 
         self.editor.set_cursor(target, extend);
+        self.follow_caret();
         // set_cursor cleared the run; restore the goal for vertical moves.
         if vertical {
             self.goal_col = Some(goal);
@@ -327,7 +544,21 @@ impl App {
     }
 
     pub fn page_count(&self) -> usize {
-        print::page_count(&self.lines)
+        if self.screenplay {
+            self.layout.page_count()
+        } else {
+            print::page_count(self.lines())
+        }
+    }
+
+    /// The zero-based page the caret is on.
+    fn caret_page(&self) -> usize {
+        let (line, _) = self.cursor_position();
+        if self.screenplay {
+            self.layout.page_of_line.get(line).copied().unwrap_or(0)
+        } else {
+            print::page_of(line)
+        }
     }
 
     /// The print job text for `scope`, or `None` if there is nothing to
@@ -336,7 +567,38 @@ impl App {
         if self.editor.to_string().trim().is_empty() {
             return None;
         }
-        print::job(self.editor.text(), &self.lines, scope)
+        print::job(self.editor.text(), self.lines(), scope)
+    }
+
+    /// A screenplay's print job: a typewritten PDF. The whole script
+    /// opens with its title page; a single page goes alone, with its
+    /// number. `None` if there is nothing to print or no such page.
+    pub fn script_pdf(&self, scope: Scope) -> Option<Vec<u8>> {
+        let source = self.editor.to_string();
+        if source.trim().is_empty() {
+            return None;
+        }
+        // Laid out as the file stands, without the caret's say.
+        let layout = Layout::screenplay(self.editor.text(), Caret::default());
+        let pages = layout.print_pages(self.editor.text());
+        let sheets: Vec<Sheet> = pages
+            .iter()
+            .enumerate()
+            .map(|(i, lines)| Sheet {
+                number: i + 1,
+                lines,
+            })
+            .collect();
+        match scope {
+            Scope::Full => Some(typewriter::render(
+                &script::title_page(&source),
+                &sheets,
+                self.ribbon,
+            )),
+            Scope::Page(n) => sheets
+                .get(n)
+                .map(|s| typewriter::render(&[], std::slice::from_ref(s), self.ribbon)),
+        }
     }
 
     /// Keys reaching the print screen: a digit picks, 0 or Esc leaves.
@@ -346,9 +608,12 @@ impl App {
             Command::Dismiss | Command::Newline => Some('0'),
             _ => None,
         };
-        let (line, _) = self.cursor_position();
-        let page = Scope::Page(print::page_of(line));
+        let page = Scope::Page(self.caret_page());
         match choice {
+            Some('r' | 'R') if self.screenplay => {
+                self.ribbon = self.ribbon.next();
+                return;
+            }
             Some('1') => self.print_request = Some(Request::Printer(Scope::Full)),
             Some('2') => self.print_request = Some(Request::Printer(page)),
             Some('3') => self.print_request = Some(Request::ToFile(Scope::Full)),
@@ -460,6 +725,508 @@ impl App {
         }
     }
 
+    /// Typing in a screenplay. Headings, cues and transitions are in
+    /// capitals, so letters typed into them come out that way; a paste
+    /// keeps its own case.
+    fn script_insert(&mut self, s: &str, now_ms: u64) {
+        let typed = !s.contains('\n');
+        let s = if typed && self.caret_element().capitalised() {
+            upper(s)
+        } else {
+            s.to_string()
+        };
+        self.editor.insert(&s, now_ms);
+        self.after_edit();
+        // `int.` becomes a heading at the full stop: raise what came
+        // before it too.
+        if typed && self.caret_element() == Element::SceneHeading {
+            self.raise_line(now_ms);
+        }
+    }
+
+    /// Put the caret's whole line in capitals, leaving the caret where
+    /// it was.
+    fn raise_line(&mut self, now_ms: u64) {
+        let (_, start, end) = self.caret_source();
+        let line: String = self.editor.text()[start..end].iter().collect();
+        let raised = upper(&line);
+        if raised == line {
+            return;
+        }
+        let cursor = self.editor.cursor();
+        self.replace_range(start, end, &raised, now_ms);
+        self.editor.set_cursor(cursor, false);
+        self.after_edit();
+    }
+
+    /// Replace `start..end` with `s` as one edit.
+    fn replace_range(&mut self, start: usize, end: usize, s: &str, now_ms: u64) {
+        self.editor.set_cursor(start, false);
+        self.editor.set_cursor(end, true);
+        if s.is_empty() {
+            self.editor.backspace(now_ms);
+        } else {
+            self.editor.insert(s, now_ms);
+        }
+    }
+
+    /// Whether an action line would read as a character cue if dialogue
+    /// followed: capitals after a blank line, not a heading, transition
+    /// or `FADE IN:`. A name does not end a sentence, so `BOOM!` and
+    /// `A.` stay action.
+    fn would_be_cue(&self, start: usize, line: &str) -> bool {
+        let text = self.editor.text();
+        let after_blank = start == 0 || (start >= 2 && text[start - 2] == '\n') || start == 1;
+        let t = line.trim();
+        after_blank
+            && !t.is_empty()
+            && fountain::is_cue(t)
+            && !t.ends_with(['.', '!', '?', ':', ',', ';'])
+            && !fountain::is_scene_heading(t)
+    }
+
+    /// Enter in a screenplay ends the element and starts the one that
+    /// follows it: a cue gets its dialogue on the next line, a speech or
+    /// a paragraph gets a blank line and then action.
+    fn script_newline(&mut self, now_ms: u64) {
+        if self.editor.selection().is_some() {
+            self.editor.insert("\n", now_ms);
+            self.after_edit();
+            return;
+        }
+        let el = self.caret_element();
+        let (_, start, end) = self.caret_source();
+        let cursor = self.editor.cursor();
+        let tail: String = self.editor.text()[cursor..end].iter().collect();
+        if el == Element::Parenthetical && tail == ")" {
+            // Enter inside the parentheses steps out of them.
+            self.editor.set_cursor(end, false);
+        } else if cursor != end {
+            // In the middle of a line Enter splits it, as in prose.
+            self.pending = None;
+            self.editor.insert("\n", now_ms);
+            self.after_edit();
+            return;
+        }
+        let line: String = self.editor.text()[start..end].iter().collect();
+        let cue_like =
+            el == Element::Character || (el == Element::Action && self.would_be_cue(start, &line));
+        if cue_like {
+            if let Some(rest) = self.completion() {
+                self.editor.insert(&rest, now_ms);
+            }
+        }
+        let pending = self.caret().pending;
+        self.pending = None;
+        let line: String = {
+            let (_, start, end) = self.caret_source();
+            self.editor.text()[start..end].iter().collect()
+        };
+        if line.trim().is_empty() {
+            self.editor.insert("\n", now_ms);
+            self.after_edit();
+            return;
+        }
+        // A line made a heading or transition with Tab keeps that
+        // element once the caret leaves it, by Fountain's forcing mark.
+        let t = line.trim();
+        let force = match pending {
+            Some(Element::SceneHeading)
+                if !fountain::is_scene_heading(t) && !t.starts_with('.') =>
+            {
+                "."
+            }
+            Some(Element::Transition) if !t.ends_with("TO:") && !t.starts_with('>') => "> ",
+            Some(Element::Character) if !fountain::is_cue(t) && !t.starts_with('@') => "@",
+            _ => "",
+        };
+        if !force.is_empty() {
+            let at = self.editor.cursor();
+            self.editor.set_cursor(start, false);
+            self.editor.insert(force, now_ms);
+            self.editor.set_cursor(at + force.len(), false);
+        }
+        let breaks = match el {
+            Element::SceneHeading | Element::Transition => {
+                self.raise_line(now_ms);
+                "\n\n"
+            }
+            Element::Character => {
+                self.raise_line(now_ms);
+                "\n"
+            }
+            Element::Action if cue_like => {
+                self.raise_line(now_ms);
+                "\n"
+            }
+            Element::Parenthetical | Element::TitlePage => "\n",
+            _ => "\n\n",
+        };
+        self.editor.set_cursor(self.caret_source().2, false);
+        self.editor.insert(breaks, now_ms);
+        self.after_edit();
+    }
+
+    /// Tab in a screenplay. It takes what completion offers; on an empty
+    /// line it picks the element the line will be; in a speech it opens
+    /// a parenthetical, or steps out of one.
+    fn script_tab(&mut self, now_ms: u64) {
+        if self.completion().is_some() {
+            self.accept_completion(now_ms);
+            return;
+        }
+        let el = self.caret_element();
+        let (_, start, end) = self.caret_source();
+        let cursor = self.editor.cursor();
+        let text = self.editor.text();
+        let empty = text[start..end].iter().all(|c| c.is_whitespace());
+        let tail: String = text[cursor..end].iter().collect();
+
+        if empty && el != Element::Dialogue {
+            let next = match self.caret().pending {
+                None => Some(Element::Character),
+                Some(Element::Character) => Some(Element::Transition),
+                Some(Element::Transition) => Some(Element::SceneHeading),
+                Some(_) => None,
+            };
+            self.pending = next.map(|el| (start, el));
+            self.reflow();
+            if let Some(el) = next {
+                self.notify(el.name());
+            }
+            return;
+        }
+        match el {
+            Element::Dialogue | Element::Character if cursor == end => {
+                let open = if empty { "()" } else { "\n()" };
+                self.editor.insert(open, now_ms);
+                self.editor.set_cursor(self.editor.cursor() - 1, false);
+                self.after_edit();
+            }
+            Element::Parenthetical if tail == ")" => {
+                self.editor.set_cursor(end, false);
+                self.editor.insert("\n", now_ms);
+                self.after_edit();
+            }
+            _ => {}
+        }
+    }
+
+    /// What completion offers at the caret: the rest of a character's
+    /// name, a location after INT. or EXT., or a time after the dash.
+    fn completion(&self) -> Option<String> {
+        if !self.screenplay || self.editor.selection().is_some() {
+            return None;
+        }
+        let (_, start, end) = self.caret_source();
+        if self.editor.cursor() != end {
+            return None;
+        }
+        let line: String = self.editor.text()[start..end].iter().collect();
+        let raised = upper(&line);
+        let offer = |typed: &str, from: &[String]| -> Option<String> {
+            let typed = typed.trim_start();
+            if typed.is_empty() {
+                return None;
+            }
+            from.iter()
+                .find(|c| c.starts_with(typed) && c.len() > typed.len())
+                .map(|c| c[typed.len()..].to_string())
+        };
+        match self.caret_element() {
+            Element::Character => {
+                let typed = raised.trim_start_matches('@');
+                (!typed.contains('(')).then(|| offer(typed, &self.layout.characters))?
+            }
+            Element::Action if self.would_be_cue(start, &line) => {
+                offer(&raised, &self.layout.characters)
+            }
+            Element::SceneHeading => {
+                if let Some(dash) = raised.rfind(" - ") {
+                    return offer(&raised[dash + 3..], &self.layout.times);
+                }
+                let body = match fountain::scene_prefix_len(raised.trim_start()) {
+                    Some(n) => &raised.trim_start()[n..],
+                    None => raised.trim_start().strip_prefix('.')?,
+                };
+                offer(body, &self.layout.locations)
+            }
+            _ => None,
+        }
+    }
+
+    fn accept_completion(&mut self, now_ms: u64) {
+        if let Some(rest) = self.completion() {
+            self.editor.insert(&rest, now_ms);
+            self.after_edit();
+        }
+    }
+
+    /// Keys reaching the scene list.
+    fn scenes_key(&mut self, cmd: Command) {
+        let Overlay::Scenes { selected } = &mut self.overlay else {
+            return;
+        };
+        let count = self.layout.scenes.len();
+        let last = count.saturating_sub(1);
+        match cmd {
+            Command::Move { motion, .. } => {
+                *selected = match motion {
+                    Motion::Up | Motion::Left => selected.saturating_sub(1),
+                    Motion::Down | Motion::Right => (*selected + 1).min(last),
+                    Motion::PageUp => selected.saturating_sub(10),
+                    Motion::PageDown => (*selected + 10).min(last),
+                    Motion::DocStart | Motion::LineStart => 0,
+                    Motion::DocEnd | Motion::LineEnd => last,
+                    _ => *selected,
+                }
+            }
+            Command::Newline => {
+                let at = *selected;
+                self.overlay = Overlay::None;
+                if let Some(scene) = self.layout.scenes.get(at) {
+                    self.editor.set_cursor(scene.offset, false);
+                    self.goal_col = None;
+                    self.follow_caret();
+                    // The heading opens the screen, a row of context
+                    // above it.
+                    self.viewport_top = self.cursor_row().saturating_sub(1);
+                    self.scroll_to_cursor();
+                }
+            }
+            Command::Dismiss => self.overlay = Overlay::None,
+            _ => {}
+        }
+    }
+
+    fn open_title_page(&mut self) {
+        let current = script::title_page(&self.editor.to_string());
+        let fields: Vec<(&str, &str, String)> = TITLE_FIELDS
+            .iter()
+            .map(|&(key, label)| {
+                let value = current
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, v)| v.replace('\n', " | "))
+                    .unwrap_or_else(|| {
+                        if key == "credit" {
+                            "Written by".to_string()
+                        } else {
+                            String::new()
+                        }
+                    });
+                (key, label, value)
+            })
+            .collect();
+        self.overlay = Overlay::TitlePage(Form::new(&fields));
+    }
+
+    /// Keys reaching the title page form.
+    fn title_key(&mut self, cmd: Command, now_ms: u64) {
+        let Overlay::TitlePage(form) = &mut self.overlay else {
+            return;
+        };
+        match cmd {
+            Command::Insert(text) => form.focused().insert(&text),
+            Command::Backspace => form.focused().backspace(),
+            Command::DeleteForward => form.focused().delete(),
+            Command::Tab
+            | Command::Move {
+                motion: Motion::Down,
+                ..
+            } => form.next(),
+            Command::Move {
+                motion: Motion::Up, ..
+            } => form.prev(),
+            Command::Move {
+                motion: Motion::Left,
+                ..
+            } => form.focused().left(),
+            Command::Move {
+                motion: Motion::Right,
+                ..
+            } => form.focused().right(),
+            Command::Move {
+                motion: Motion::LineStart,
+                ..
+            } => form.focused().home(),
+            Command::Move {
+                motion: Motion::LineEnd,
+                ..
+            } => form.focused().end(),
+            Command::Newline => {
+                let form = form.clone();
+                self.overlay = Overlay::None;
+                self.write_title_page(&form, now_ms);
+            }
+            Command::Dismiss => self.overlay = Overlay::None,
+            _ => {}
+        }
+    }
+
+    /// Replace the title page block at the top of the file with the
+    /// form's fields. A value split with `|` runs onto indented lines.
+    fn write_title_page(&mut self, form: &Form, now_ms: u64) {
+        let mut block = String::new();
+        for (key, input) in &form.fields {
+            let value = input.value();
+            let parts: Vec<&str> = value
+                .split('|')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .collect();
+            let label = TITLE_FIELDS
+                .iter()
+                .find(|(k, _)| k == key)
+                .map_or(key.as_str(), |(_, l)| *l);
+            match parts.as_slice() {
+                [] => {}
+                [one] => block.push_str(&format!("{label}: {one}\n")),
+                many => {
+                    block.push_str(&format!("{label}:\n"));
+                    for part in many {
+                        block.push_str(&format!("    {part}\n"));
+                    }
+                }
+            }
+        }
+        if !block.is_empty() {
+            block.push('\n');
+        }
+
+        // The old block: its lines, and the blank lines after it.
+        let text = self.editor.text();
+        let mut end = 0;
+        if self.layout.source_kinds.first() == Some(&Element::TitlePage) {
+            let mut kinds = self.layout.source_kinds.iter();
+            let mut at = 0;
+            while kinds.next() == Some(&Element::TitlePage) {
+                at = text[at..]
+                    .iter()
+                    .position(|&c| c == '\n')
+                    .map_or(text.len(), |i| at + i + 1);
+            }
+            while at < text.len() && text[at] == '\n' {
+                at += 1;
+            }
+            end = at;
+        }
+        let old: String = text[..end].iter().collect();
+        if old == block {
+            return;
+        }
+        let cursor = self.editor.cursor();
+        let moved = if cursor >= end {
+            cursor - end + block.chars().count()
+        } else {
+            block.chars().count()
+        };
+        self.replace_range(0, end, &block, now_ms);
+        self.editor.set_cursor(moved, false);
+        self.after_edit();
+        self.notify("Title page saved");
+    }
+
+    fn paint_scenes(&mut self, selected: usize) {
+        let fg = 15;
+        let bg = BG;
+        if self.layout.scenes.is_empty() {
+            overlay::draw_centered(
+                &mut self.screen,
+                "Go to Scene",
+                "No scene headings yet.\n\nStart one with INT. or EXT.,\nor press Tab three times\non an empty line.",
+                fg,
+                bg,
+            );
+            return;
+        }
+        let width = 72;
+        let x = (self.screen.cols() - width) / 2;
+        let visible = self
+            .layout
+            .scenes
+            .len()
+            .min(self.screen.rows().saturating_sub(8))
+            .max(1);
+        let height = visible + 4;
+        let y = (self.screen.rows().saturating_sub(height)) / 2;
+        overlay::draw_box(&mut self.screen, x, y, width, height, fg, bg);
+        let title = " Go to Scene ";
+        self.screen
+            .put_str(x + (width - title.len()) / 2, y, title, fg, bg);
+
+        let top = if selected < visible {
+            0
+        } else {
+            selected + 1 - visible
+        };
+        let inner = width - 4;
+        for (i, scene) in self
+            .layout
+            .scenes
+            .iter()
+            .enumerate()
+            .skip(top)
+            .take(visible)
+        {
+            let page = format!("{}.", scene.page + 1);
+            let number = format!("{:>3}  ", i + 1);
+            let room = inner - number.len() - page.len() - 1;
+            let heading: String = scene.heading.chars().take(room).collect();
+            let row = format!("{number}{heading:<room$} {page}");
+            let (rfg, rbg) = if i == selected { (0, 7) } else { (fg, bg) };
+            let ry = y + 1 + (i - top);
+            for c in 1..width - 1 {
+                self.screen.set(x + c, ry, 0x20, rfg, rbg);
+            }
+            self.screen.put_str(x + 2, ry, &row, rfg, rbg);
+        }
+        let help = "Enter  Go     Esc  Cancel";
+        self.screen
+            .put_str(x + (width - help.len()) / 2, y + height - 2, help, fg, bg);
+    }
+
+    fn paint_title_page(&mut self, form: &Form, blink_on: bool) {
+        let fg = 15;
+        let bg = BG;
+        let inner = 44usize;
+        let label_w = 12;
+        let width = label_w + inner + 8;
+        let height = form.fields.len() * 2 + 6;
+        let x = (self.screen.cols() - width) / 2;
+        let y = (self.screen.rows().saturating_sub(height)) / 2;
+        overlay::draw_box(&mut self.screen, x, y, width, height, fg, bg);
+        let title = " Title Page ";
+        self.screen
+            .put_str(x + (width - title.len()) / 2, y, title, fg, bg);
+
+        for (i, (_, field)) in form.fields.iter().enumerate() {
+            let fy = y + 2 + i * 2;
+            let label = format!("{:>label_w$}", field.label());
+            self.screen.put_str(x + 3, fy, &label, fg, bg);
+            let fx = x + 3 + label_w + 2;
+            for c in 0..inner {
+                self.screen.set(fx + c, fy, 0x20, 0, 7);
+            }
+            let value: Vec<char> = field.value().chars().collect();
+            let offset = field.cursor().saturating_sub(inner.saturating_sub(1));
+            let shown: String = value.iter().skip(offset).take(inner).collect();
+            self.screen.put_str(fx, fy, &shown, 0, 7);
+            if i == form.focus && blink_on {
+                let cx = fx + (field.cursor() - offset).min(inner - 1);
+                self.screen.set_cursor(Some((cx, fy)));
+            }
+        }
+        let help = "Tab  Next   Enter  Save   Esc  Cancel   |  New line";
+        self.screen.put_str(
+            x + (width.saturating_sub(help.len())) / 2,
+            y + height - 2,
+            help,
+            fg,
+            bg,
+        );
+    }
+
     /// Solid while typing; a slow blink once you pause.
     pub fn cursor_visible(&self, now_ms: u64) -> bool {
         let since = now_ms.saturating_sub(self.last_input_ms);
@@ -487,6 +1254,14 @@ impl App {
                 self.print_key(cmd);
                 return;
             }
+            Overlay::Scenes { .. } => {
+                self.scenes_key(cmd);
+                return;
+            }
+            Overlay::TitlePage(_) => {
+                self.title_key(cmd, now_ms);
+                return;
+            }
             Overlay::Message { .. } | Overlay::Confirm { .. } => {
                 if matches!(cmd, Command::Dismiss) {
                     self.overlay = Overlay::None;
@@ -503,31 +1278,53 @@ impl App {
                 if filtered.is_empty() {
                     return;
                 }
-                self.editor.insert(&filtered, now_ms);
-                self.after_edit();
+                if self.screenplay {
+                    self.script_insert(&filtered, now_ms);
+                } else {
+                    self.editor.insert(&filtered, now_ms);
+                    self.after_edit();
+                }
+                self.strike(&filtered);
+            }
+            Command::Newline if self.screenplay => {
+                self.sound(Sound::Return);
+                self.script_newline(now_ms);
             }
             Command::Newline => {
+                self.sound(Sound::Return);
                 self.editor.insert("\n", now_ms);
                 self.after_edit();
             }
+            Command::Tab if self.screenplay => {
+                self.sound(Sound::Key);
+                self.script_tab(now_ms);
+            }
             Command::Tab => {
+                self.sound(Sound::Key);
                 let (_, col) = self.cursor_position();
                 let spaces = TAB_STOP - (col % TAB_STOP);
                 self.editor.insert(&" ".repeat(spaces), now_ms);
                 self.after_edit();
             }
             Command::Backspace => {
+                self.sound(Sound::Key);
                 self.editor.backspace(now_ms);
                 self.after_edit();
             }
             Command::DeleteForward => {
+                self.sound(Sound::Key);
                 self.editor.delete_forward(now_ms);
                 self.after_edit();
             }
+            Command::Move {
+                motion: Motion::Right,
+                extend: false,
+            } if self.completion().is_some() => self.accept_completion(now_ms),
             Command::Move { motion, extend } => self.move_cursor(motion, extend),
             Command::SelectAll => {
                 self.editor.set_cursor(0, false);
                 self.editor.set_cursor(self.editor.len(), true);
+                self.follow_caret();
             }
             Command::Undo => {
                 if self.editor.undo() {
@@ -557,6 +1354,30 @@ impl App {
                 };
             }
             Command::ShowWordCount => self.word_count_until = now_ms + 3_000,
+            Command::ToggleSounds => {
+                let on = !self.sounds_on;
+                self.set_sounds(on);
+                self.notify(if on {
+                    "Typewriter sounds on"
+                } else {
+                    "Typewriter sounds off"
+                });
+            }
+            Command::ToggleScreenplay => {
+                let on = !self.screenplay;
+                self.set_screenplay(on);
+                self.notify(if on { "Screenplay" } else { "Prose" });
+            }
+            Command::SceneList if self.screenplay => {
+                let here = self.layout.scene_at(self.editor.cursor());
+                self.overlay = Overlay::Scenes {
+                    selected: here.saturating_sub(1),
+                };
+            }
+            Command::TitlePage if self.screenplay => self.open_title_page(),
+            Command::SceneList | Command::TitlePage => {
+                self.notify("Screenplays only: F8 switches");
+            }
             Command::ToggleDenseMode => {
                 let dense = self.dense();
                 self.set_dense(!dense);
@@ -571,6 +1392,7 @@ impl App {
             | Command::Cut
             | Command::Paste
             | Command::New
+            | Command::NewScreenplay
             | Command::Open
             | Command::Retrieve
             | Command::Save
@@ -582,32 +1404,44 @@ impl App {
     /// Test hook: the wrap cache, so tests can compute expected offsets.
     #[cfg(test)]
     pub fn lines_for_test(&self) -> &[VisualLine] {
-        &self.lines
+        self.lines()
     }
 
     /// The character offset under a grid cell.
     pub fn offset_at_cell(&self, col: usize, row: usize) -> usize {
-        let line = self.viewport_top + row.saturating_sub(wrap::TEXT_TOP);
+        let r = self.viewport_top + row.saturating_sub(wrap::TEXT_TOP);
+        let rows = &self.layout.rows;
         // Clicking in the empty space below the text lands at the end of
         // the document, not at the start of the last line.
-        if line >= self.lines.len() {
+        if r >= rows.len() {
             return self.editor.len();
         }
-        let col = col.saturating_sub(wrap::TEXT_LEFT);
-        wrap::offset_at(&self.lines, line, col)
+        // A row that is not text -- the page rule, (MORE) -- lands on the
+        // next line of text, or the last if there is none after it.
+        let line = rows[r..]
+            .iter()
+            .chain(rows[..r].iter().rev())
+            .find_map(|row| match row {
+                Row::Line(li) => Some(*li),
+                _ => None,
+            })
+            .unwrap_or(0);
+        let col = col.saturating_sub(self.left() + self.indent(line));
+        wrap::offset_at(self.lines(), line, col)
     }
 
     pub fn click(&mut self, col: usize, row: usize, extend: bool) {
         self.last_input_ms = self.now_ms;
         let offset = self.offset_at_cell(col, row);
         self.editor.set_cursor(offset, extend);
+        self.follow_caret();
         self.goal_col = None;
         self.scroll_to_cursor();
     }
 
     /// Scroll without moving the caret, as a scroll wheel should.
     pub fn scroll(&mut self, lines: i32) {
-        let max_top = self.lines.len().saturating_sub(self.text_rows());
+        let max_top = self.layout.rows.len().saturating_sub(self.text_rows());
         let next = self.viewport_top as i64 + lines as i64;
         self.viewport_top = next.clamp(0, max_top as i64) as usize;
     }
@@ -625,17 +1459,47 @@ impl App {
         let blink_on = self.cursor_visible(now_ms);
         self.screen.clear(FG, BG);
         let rows = self.text_rows();
+        let left = self.left();
+        let cue = left + script::CUE_COL - script::ACTION_COL;
         let text = self.editor.text();
 
         for row in 0..rows {
-            let Some(line) = self.lines.get(self.viewport_top + row) else {
+            let Some(r) = self.layout.rows.get(self.viewport_top + row) else {
                 break;
             };
-            let s: String = text[line.start..line.end].iter().collect();
-            self.screen
-                .put_str(wrap::TEXT_LEFT, wrap::TEXT_TOP + row, &s, FG, BG);
+            let y = wrap::TEXT_TOP + row;
+            match r {
+                Row::Line(li) => {
+                    let line = self.layout.lines[*li];
+                    let s: String = text[line.start..line.end].iter().collect();
+                    let fg = match self.layout.kinds[*li] {
+                        _ if !self.screenplay => FG,
+                        Element::SceneHeading => HEADING_FG,
+                        el if !el.prints() || el == Element::TitlePage => NOTE_FG,
+                        _ => FG,
+                    };
+                    self.screen.put_str(left + line.indent, y, &s, fg, BG);
+                }
+                Row::Break(page) => {
+                    // The rule a page break was drawn with, carrying the
+                    // number the new page will be typed with.
+                    for c in left..left + script::BLOCK_WIDTH {
+                        self.screen.set(c, y, 0xC4, DIM_FG, BG);
+                    }
+                    let label = format!(" {page}. ");
+                    let at = left + script::BLOCK_WIDTH - label.len() - 1;
+                    self.screen.put_str(at, y, &label, DIM_FG, BG);
+                }
+                Row::More => {
+                    self.screen.put_str(cue, y, "(MORE)", DIM_FG, BG);
+                }
+                Row::Contd(name) => {
+                    self.screen.put_str(cue, y, name, DIM_FG, BG);
+                }
+            }
         }
 
+        self.paint_completion();
         self.paint_selection();
         self.screen.set_cursor(None);
         // An open modal owns the cursor. Blinking it in the document behind
@@ -649,7 +1513,10 @@ impl App {
 
     /// Whether the open overlay places the cursor itself.
     fn overlay_owns_cursor(&self) -> bool {
-        matches!(self.overlay, Overlay::Field(_) | Overlay::Print { .. })
+        matches!(
+            self.overlay,
+            Overlay::Field(_) | Overlay::Print { .. } | Overlay::TitlePage(_)
+        )
     }
 
     /// WordPerfect's Shift-F7 screen: the document goes away, the
@@ -658,8 +1525,7 @@ impl App {
     fn paint_print(&mut self, printer: Option<&str>) {
         self.screen.clear(FG, BG);
         let rows = self.screen.rows();
-        let (line, _) = self.cursor_position();
-        let here = print::page_of(line) + 1;
+        let here = self.caret_page() + 1;
         let pages = self.page_count();
 
         self.screen.put_str(0, 0, "Print", FG, BG);
@@ -673,6 +1539,12 @@ impl App {
         self.screen.put_str(5, 8, &printer_line, FG, BG);
         let pages_line = format!("Pages                 {pages}   (cursor on page {here})");
         self.screen.put_str(5, 9, &pages_line, FG, BG);
+        if self.screenplay {
+            let ribbon = format!("R - Ribbon            {}", self.ribbon.name());
+            self.screen.put_str(5, 10, &ribbon, FG, BG);
+            self.screen
+                .put_str(5, 12, "Typed on Courier 10 Pitch, as a PDF.", DIM_FG, BG);
+        }
 
         let sel = "Selection: 0";
         let bottom = rows - 1;
@@ -698,6 +1570,8 @@ impl App {
                 overlay::draw_centered(&mut self.screen, "", &body, 15, 1);
             }
             Overlay::Print { printer } => self.paint_print(printer.as_deref()),
+            Overlay::Scenes { selected } => self.paint_scenes(selected),
+            Overlay::TitlePage(form) => self.paint_title_page(&form, blink_on),
         }
     }
 
@@ -706,29 +1580,49 @@ impl App {
             return;
         };
         let rows = self.text_rows();
+        let left = self.left();
         for row in 0..rows {
-            let Some(line) = self.lines.get(self.viewport_top + row).copied() else {
+            let Some(r) = self.layout.rows.get(self.viewport_top + row) else {
                 break;
             };
+            let Row::Line(li) = r else {
+                continue;
+            };
+            let line = self.layout.lines[*li];
             let from = lo.max(line.start);
             let to = hi.min(line.end);
             for offset in from..to {
-                let col = wrap::TEXT_LEFT + (offset - line.start);
+                let col = left + line.indent + (offset - line.start);
                 self.screen.invert(col, wrap::TEXT_TOP + row);
             }
         }
     }
 
-    fn paint_cursor(&mut self) {
+    /// Where the caret is on the grid, if it is on screen.
+    fn caret_cell(&self) -> Option<(usize, usize)> {
         let (line, col) = self.cursor_position();
-        if line < self.viewport_top {
+        let row = self.cursor_row().checked_sub(self.viewport_top)?;
+        (row < self.text_rows())
+            .then(|| (self.left() + self.indent(line) + col, wrap::TEXT_TOP + row))
+    }
+
+    fn paint_cursor(&mut self) {
+        if let Some(cell) = self.caret_cell() {
+            self.screen.set_cursor(Some(cell));
+        }
+    }
+
+    /// What completion offers, in dim type after the caret.
+    fn paint_completion(&mut self) {
+        if !matches!(self.overlay, Overlay::None) {
             return;
         }
-        let row = line - self.viewport_top;
-        if row < self.text_rows() {
-            self.screen
-                .set_cursor(Some((wrap::TEXT_LEFT + col, wrap::TEXT_TOP + row)));
-        }
+        let (Some(rest), Some((x, y))) = (self.completion(), self.caret_cell()) else {
+            return;
+        };
+        let room = self.screen.cols().saturating_sub(x);
+        let shown: String = rest.chars().take(room).collect();
+        self.screen.put_str(x, y, &shown, DIM_FG, BG);
     }
 
     /// The bar across row 0, plus a dropdown when one is pulled down.
@@ -861,8 +1755,23 @@ impl App {
         };
         let right = if let Some(text) = notice {
             text
+        } else if self.now_ms < self.word_count_until && self.screenplay {
+            // A page of script is about a minute of screen time.
+            let pages = self.layout.page_count();
+            format!(
+                "{pages} pp   {} scenes   ~{pages} min",
+                self.layout.scenes.len()
+            )
         } else if self.now_ms < self.word_count_until {
             format!("{} words", self.editor.word_count())
+        } else if self.screenplay {
+            format!(
+                "{}   Sc {}   Pg {}/{}",
+                self.caret_element().name(),
+                self.layout.scene_at(self.editor.cursor()),
+                self.caret_page() + 1,
+                self.layout.page_count()
+            )
         } else {
             let (line, col) = self.cursor_position();
             status::right_field(&status::measure(line, col))
@@ -873,6 +1782,20 @@ impl App {
             .saturating_sub(right.chars().count() + STATUS_MARGIN);
         self.screen.put_str(start, row, &right, STATUS_FG, BG);
     }
+}
+
+/// Capitals, one character for one, so offsets survive: a letter whose
+/// capital is longer (ß) is left as it is.
+fn upper(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            let mut up = c.to_uppercase();
+            match (up.next(), up.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        })
+        .collect()
 }
 
 impl Default for App {
@@ -1185,7 +2108,7 @@ mod tests {
         let in_document = a.screen().cursor().expect("a cursor in the document");
 
         a.open_field(
-            Purpose::CreateAtLaunch,
+            Purpose::Retrieve,
             "New Document",
             "Document to be created:",
             "",
@@ -1733,7 +2656,7 @@ entering along with him.";
         shot("nostatus", &|a| a.apply(Command::ToggleStatusLine, 0));
         shot("name", &|a| {
             a.open_field(
-                Purpose::CreateAtLaunch,
+                Purpose::Retrieve,
                 "New Document",
                 "Document to be created:",
                 "",
@@ -1808,7 +2731,7 @@ entering along with him.";
     #[test]
     fn a_modal_field_takes_typing_instead_of_the_document() {
         let mut a = app_with("doc");
-        a.open_field(Purpose::SaveAs, "Save Document", "Filename:", "");
+        a.open_field(Purpose::Retrieve, "Save Document", "Filename:", "");
         key(&mut a, Command::Insert("notes.txt".to_string()));
         assert_eq!(a.editor().to_string(), "doc", "document untouched");
         let Overlay::Field(f) = a.overlay() else {
@@ -1820,7 +2743,7 @@ entering along with him.";
     #[test]
     fn a_field_seeds_from_the_current_name() {
         let mut a = App::new();
-        a.open_field(Purpose::SaveAs, "Save Document", "Filename:", "ch1.txt");
+        a.open_field(Purpose::Retrieve, "Save Document", "Filename:", "ch1.txt");
         let Overlay::Field(f) = a.overlay() else {
             panic!("field");
         };
@@ -1831,13 +2754,13 @@ entering along with him.";
     #[test]
     fn submitting_a_field_hands_the_value_over_once() {
         let mut a = App::new();
-        a.open_field(Purpose::CreateAtLaunch, "New Document", "Name:", "");
+        a.open_field(Purpose::Retrieve, "New Document", "Name:", "");
         key(&mut a, Command::Insert("chapter-one.txt".to_string()));
         key(&mut a, Command::Newline);
         assert!(matches!(a.overlay(), Overlay::None), "the modal closed");
         assert_eq!(
             a.take_submitted(),
-            Some((Purpose::CreateAtLaunch, "chapter-one.txt".to_string()))
+            Some((Purpose::Retrieve, "chapter-one.txt".to_string()))
         );
         assert_eq!(a.take_submitted(), None, "taken only once");
     }
@@ -1845,7 +2768,7 @@ entering along with him.";
     #[test]
     fn escaping_a_field_submits_nothing() {
         let mut a = App::new();
-        a.open_field(Purpose::CreateAtLaunch, "New Document", "Name:", "");
+        a.open_field(Purpose::Retrieve, "New Document", "Name:", "");
         key(&mut a, Command::Insert("draft".to_string()));
         key(&mut a, Command::Dismiss);
         assert!(matches!(a.overlay(), Overlay::None));
@@ -1855,7 +2778,7 @@ entering along with him.";
     #[test]
     fn an_empty_name_is_the_same_as_backing_out() {
         let mut a = App::new();
-        a.open_field(Purpose::CreateAtLaunch, "New Document", "Name:", "");
+        a.open_field(Purpose::Retrieve, "New Document", "Name:", "");
         key(&mut a, Command::Insert("   ".to_string()));
         key(&mut a, Command::Newline);
         assert_eq!(a.take_submitted(), None);
@@ -1864,7 +2787,7 @@ entering along with him.";
     #[test]
     fn editing_keys_work_inside_a_field() {
         let mut a = App::new();
-        a.open_field(Purpose::SaveAs, "Save Document", "Filename:", "abc");
+        a.open_field(Purpose::Retrieve, "Save Document", "Filename:", "abc");
         key(&mut a, Command::Backspace);
         key(
             &mut a,
@@ -1918,7 +2841,7 @@ entering along with him.";
     fn painting_a_field_shows_its_title_label_and_value() {
         let mut a = App::new();
         a.open_field(
-            Purpose::CreateAtLaunch,
+            Purpose::Retrieve,
             "New Document",
             "Document to be created:",
             "ch1.txt",
@@ -1955,7 +2878,7 @@ entering along with him.";
     #[test]
     fn escape_inside_a_field_cancels_instead_of_opening_the_menu() {
         let mut a = App::new();
-        a.open_field(Purpose::SaveAs, "Save Document", "Filename:", "x");
+        a.open_field(Purpose::Retrieve, "Save Document", "Filename:", "x");
         key(&mut a, Command::Dismiss);
         assert!(
             matches!(a.overlay(), Overlay::None),
@@ -2032,11 +2955,22 @@ entering along with him.";
                     continue;
                 };
                 let mut a = app_with("some text");
-                let before = (a.effects(), a.dense(), a.fullscreen(), a.status_line());
+                let state = |a: &App| {
+                    (
+                        a.effects(),
+                        a.dense(),
+                        a.fullscreen(),
+                        a.status_line(),
+                        a.screenplay(),
+                    )
+                };
+                let before = state(&a);
                 key(&mut a, cmd.clone());
                 let acted = a.take_deferred().is_some()
                     || !matches!(a.overlay(), Overlay::None)
-                    || (a.effects(), a.dense(), a.fullscreen(), a.status_line()) != before
+                    || state(&a) != before
+                    // Screenplay tools explain themselves in a prose file.
+                    || a.notice.is_some()
                     || a.should_quit
                     || matches!(cmd, Command::Undo | Command::Redo | Command::SelectAll)
                     || matches!(cmd, Command::ShowWordCount);
@@ -2157,5 +3091,412 @@ entering along with him.";
     fn the_help_overlay_names_print() {
         assert!(HELP_TEXT.contains("Shft-F7  Print"));
         assert!(HELP_TEXT.contains("Cmd-P  Print"));
+    }
+}
+
+#[cfg(test)]
+mod screenplay_tests {
+    use super::*;
+
+    /// Type a string one key at a time, as the keyboard sends it.
+    fn typed(a: &mut App, s: &str) {
+        for c in s.chars() {
+            match c {
+                '\n' => a.apply(Command::Newline, 0),
+                '\t' => a.apply(Command::Tab, 0),
+                c => a.apply(Command::Insert(c.to_string()), 0),
+            }
+        }
+    }
+
+    fn script() -> App {
+        let mut a = App::new();
+        a.start_screenplay();
+        a
+    }
+
+    fn text(a: &App) -> String {
+        a.editor().to_string()
+    }
+
+    /// The caret's grid cell.
+    fn caret(a: &mut App) -> (usize, usize) {
+        a.paint();
+        a.screen().cursor().expect("cursor shown")
+    }
+
+    #[test]
+    fn a_new_screenplay_opens_after_fade_in() {
+        let a = script();
+        assert_eq!(text(&a), "FADE IN:\n\n");
+        assert_eq!(a.editor().cursor(), a.editor().len());
+        assert!(!a.editor().is_dirty());
+    }
+
+    #[test]
+    fn a_heading_typed_in_lower_case_comes_out_in_capitals() {
+        let mut a = script();
+        typed(&mut a, "int. diner - night");
+        assert_eq!(text(&a), "FADE IN:\n\nINT. DINER - NIGHT");
+        assert_eq!(a.caret_element(), Element::SceneHeading);
+    }
+
+    #[test]
+    fn enter_moves_through_heading_action_cue_and_dialogue() {
+        let mut a = script();
+        typed(
+            &mut a,
+            "int. diner - night\nRain.\nREYES\nYou're late.\nShe sits.",
+        );
+        assert_eq!(
+            text(&a),
+            "FADE IN:\n\nINT. DINER - NIGHT\n\nRain.\n\nREYES\nYou're late.\n\nShe sits."
+        );
+    }
+
+    #[test]
+    fn capitals_that_end_a_sentence_stay_action() {
+        let mut a = script();
+        typed(&mut a, "BOOM!\nSmoke.");
+        assert_eq!(text(&a), "FADE IN:\n\nBOOM!\n\nSmoke.");
+    }
+
+    #[test]
+    fn the_caret_waits_at_the_dialogue_margin_under_a_cue() {
+        let mut a = script();
+        typed(&mut a, "REYES\n");
+        assert_eq!(a.caret_element(), Element::Dialogue);
+        let (col, _) = caret(&mut a);
+        assert_eq!(col, script::TEXT_LEFT + 10, "dialogue at 2.5in");
+    }
+
+    #[test]
+    fn tab_on_an_empty_line_makes_a_cue_and_capitalises() {
+        let mut a = script();
+        typed(&mut a, "\t");
+        assert_eq!(a.caret_element(), Element::Character);
+        let (col, _) = caret(&mut a);
+        assert_eq!(col, script::TEXT_LEFT + 22, "cue at 3.7in");
+        typed(&mut a, "cole\nHey.");
+        assert_eq!(text(&a), "FADE IN:\n\nCOLE\nHey.");
+    }
+
+    #[test]
+    fn tab_cycles_to_a_transition_and_a_forced_heading() {
+        let mut a = script();
+        typed(&mut a, "\t\tcut to:\n");
+        assert_eq!(text(&a), "FADE IN:\n\nCUT TO:\n\n");
+        typed(&mut a, "\t\t\tthe void\n");
+        assert!(
+            text(&a).ends_with("CUT TO:\n\n.THE VOID\n\n"),
+            "{:?}",
+            text(&a)
+        );
+        let mut b = script();
+        typed(&mut b, "\t\t\t\t");
+        assert_eq!(b.caret_element(), Element::Blank, "a fourth Tab goes back");
+    }
+
+    #[test]
+    fn tab_in_dialogue_opens_a_parenthetical_and_enter_steps_out() {
+        let mut a = script();
+        typed(&mut a, "REYES\n\tquietly\nGo.");
+        assert_eq!(text(&a), "FADE IN:\n\nREYES\n(quietly)\nGo.");
+        let layout = &a.layout;
+        assert_eq!(layout.source_kinds[3], Element::Parenthetical);
+        assert_eq!(layout.source_kinds[4], Element::Dialogue);
+    }
+
+    #[test]
+    fn a_cue_completes_from_names_already_used() {
+        let mut a = script();
+        typed(&mut a, "REYES\nHi.\n\tre");
+        assert_eq!(a.completion().as_deref(), Some("YES"));
+        typed(&mut a, "\n");
+        assert!(text(&a).ends_with("\n\nREYES\n"), "{:?}", text(&a));
+    }
+
+    #[test]
+    fn a_cue_typed_in_capitals_offers_the_name_too() {
+        let mut a = script();
+        typed(&mut a, "REYES\nHi.\nR");
+        assert_eq!(a.completion().as_deref(), Some("EYES"));
+        a.apply(
+            Command::Move {
+                motion: Motion::Right,
+                extend: false,
+            },
+            0,
+        );
+        assert!(text(&a).ends_with("\n\nREYES"));
+    }
+
+    #[test]
+    fn headings_complete_places_and_times() {
+        let mut a = script();
+        typed(&mut a, "int. diner - night\nRain.\next. d");
+        assert_eq!(a.completion().as_deref(), Some("INER"));
+        typed(&mut a, "\t - d");
+        assert_eq!(a.completion().as_deref(), Some("AY"));
+        typed(&mut a, "\t");
+        assert!(text(&a).ends_with("EXT. DINER - DAY"));
+    }
+
+    #[test]
+    fn moving_up_keeps_the_place_on_the_page() {
+        let mut a = script();
+        typed(
+            &mut a,
+            "A long line of action that runs well past the cue.\nREYES\nYes.",
+        );
+        // From the end of "Yes." (screen column 20 + 4) up to the cue:
+        // the caret lands on the cue's own column, not four in from the
+        // action margin.
+        a.apply(
+            Command::Move {
+                motion: Motion::Up,
+                extend: false,
+            },
+            0,
+        );
+        let (col, _) = caret(&mut a);
+        assert_eq!(col, script::TEXT_LEFT + 22, "the cue starts right of it");
+    }
+
+    #[test]
+    fn a_page_rule_is_drawn_and_clicks_on_it_land_on_text() {
+        let mut a = script();
+        let body: String = (0..30).map(|i| format!("Line {i}.\n")).collect();
+        typed(&mut a, &body);
+        let rule = a
+            .layout
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Break(2)))
+            .expect("a second page");
+        a.viewport_top = rule;
+        a.paint();
+        let y = wrap::TEXT_TOP;
+        assert_eq!(a.screen().cell(script::TEXT_LEFT, y).glyph, 0xC4);
+        let offset = a.offset_at_cell(script::TEXT_LEFT, y);
+        let after = a.layout.rows[rule + 1].clone();
+        let Row::Line(li) = after else {
+            panic!("text follows the rule");
+        };
+        assert_eq!(offset, a.layout.lines[li].start);
+    }
+
+    #[test]
+    fn the_status_line_names_the_element_scene_and_page() {
+        let mut a = script();
+        typed(&mut a, "int. diner - night\nREYES\n");
+        a.paint();
+        let row = a.screen().rows() - 1;
+        let line: String = (0..80)
+            .map(|c| cp437::decode(a.screen().cell(c, row).glyph))
+            .collect();
+        assert!(line.contains("Dialogue   Sc 1   Pg 1/1"), "{line}");
+    }
+
+    #[test]
+    fn the_print_screen_cycles_the_ribbon() {
+        let mut a = script();
+        a.open_print(None);
+        assert_eq!(a.ribbon(), Ribbon::Fresh);
+        a.apply(Command::Insert("r".to_string()), 0);
+        assert_eq!(a.ribbon(), Ribbon::Worn);
+        assert!(matches!(a.overlay(), Overlay::Print { .. }), "stays open");
+    }
+
+    #[test]
+    fn a_screenplay_prints_as_a_pdf() {
+        let mut a = script();
+        typed(&mut a, "int. diner - night\nRain.");
+        let pdf = a.script_pdf(Scope::Full).expect("a job");
+        assert!(pdf.starts_with(b"%PDF"));
+        assert!(a.script_pdf(Scope::Page(4)).is_none(), "no such page");
+    }
+
+    #[test]
+    fn the_title_page_form_writes_fountain_keys() {
+        let mut a = script();
+        a.apply(Command::TitlePage, 0);
+        typed(&mut a, "Pilot\t\tA. Writer\t\t\t1 Main St | Springfield");
+        a.apply(Command::Newline, 0);
+        assert_eq!(
+            text(&a),
+            "Title: Pilot\nCredit: Written by\nAuthor: A. Writer\nContact:\n    1 Main St\n    Springfield\n\nFADE IN:\n\n"
+        );
+        assert_eq!(
+            a.editor().cursor(),
+            a.editor().len(),
+            "the caret kept its place"
+        );
+        // Editing again replaces the block rather than stacking another.
+        a.apply(Command::TitlePage, 0);
+        a.apply(Command::Newline, 0);
+        assert_eq!(text(&a).matches("Title:").count(), 1);
+    }
+
+    #[test]
+    fn go_to_scene_jumps_to_a_heading() {
+        let mut a = script();
+        typed(&mut a, "int. one - day\nA.\next. two - night\nB.");
+        a.apply(Command::SceneList, 0);
+        assert_eq!(
+            a.overlay(),
+            &Overlay::Scenes { selected: 1 },
+            "opens on the current scene"
+        );
+        a.apply(
+            Command::Move {
+                motion: Motion::Up,
+                extend: false,
+            },
+            0,
+        );
+        a.apply(Command::Newline, 0);
+        assert_eq!(a.editor().cursor(), "FADE IN:\n\n".len());
+    }
+
+    #[test]
+    fn switching_to_prose_drops_the_indents() {
+        let mut a = script();
+        typed(&mut a, "REYES\nHi.");
+        a.apply(Command::ToggleScreenplay, 0);
+        assert!(!a.screenplay());
+        assert!(a.lines().iter().all(|l| l.indent == 0));
+        let (col, _) = caret(&mut a);
+        assert_eq!(col, wrap::TEXT_LEFT + 3);
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_screenplay_preview() {
+        use crate::vga::{FB_HEIGHT, FB_WIDTH};
+        let mut a = script();
+        a.set_path(
+            std::path::PathBuf::from("/Users/srhise/Documents/pilot.fountain"),
+            false,
+        );
+        typed(
+            &mut a,
+            "int. fbi basement office - night\n\
+A single desk lamp. Files stacked to the ceiling.\n\
+REYES\n\tnot looking up\nYou're late. The tape's already rolling.\n\
+\tcole (o.s.)\nThe tape's been rolling since nineteen seventy-three.\n\
+\t\tcut to:\n\
+ext. parking garage - continuous\n\
+Concrete. Fluorescent hum.\n\
+\tre",
+        );
+        a.paint_at(0);
+        let mut fb = vec![0u8; FB_WIDTH * FB_HEIGHT * 4];
+        a.screen().render(&mut fb);
+        crate::vga::preview::write_bmp("target/screenplay-preview.bmp", &fb);
+    }
+}
+
+#[cfg(test)]
+mod screenplay_timing {
+    use super::*;
+
+    /// `cargo test --release screenplay_keystroke_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn screenplay_keystroke_cost() {
+        let scene = "INT. DINER - NIGHT\n\nRain hammers the windows. A waitress refills a cup nobody asked her to refill.\n\nREYES\n(quietly)\nYou're late. The tape has been rolling since before either of us got here.\n\nCOLE\nThen we're both late.\n\n";
+        let source = scene.repeat(450);
+        let mut a = App::new();
+        a.set_screenplay(true);
+        a.load_text(&source);
+        a.editor.set_cursor(source.len() / 2, false);
+        a.follow_caret();
+        let pages = a.page_count();
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            a.apply(Command::Insert("x".to_string()), 0);
+            a.paint();
+        }
+        let per = start.elapsed() / 20;
+        println!(
+            "{pages} pages, {} chars: {per:?} per keystroke",
+            source.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    fn typed(a: &mut App, s: &str) {
+        for c in s.chars() {
+            match c {
+                '\n' => a.apply(Command::Newline, 0),
+                c => a.apply(Command::Insert(c.to_string()), 0),
+            }
+        }
+    }
+
+    fn noisy() -> App {
+        let mut a = App::new();
+        a.set_sounds(true);
+        a
+    }
+
+    #[test]
+    fn silence_unless_asked_for() {
+        let mut a = App::new();
+        typed(&mut a, "abc\n");
+        assert!(a.take_sounds().is_empty());
+    }
+
+    #[test]
+    fn keys_space_and_return_each_have_their_sound() {
+        let mut a = noisy();
+        typed(&mut a, "a b\n");
+        assert_eq!(
+            a.take_sounds(),
+            vec![Sound::Key, Sound::Space, Sound::Key, Sound::Return]
+        );
+        assert!(a.take_sounds().is_empty(), "taken once");
+        a.apply(Command::Backspace, 0);
+        assert_eq!(a.take_sounds(), vec![Sound::Key]);
+    }
+
+    #[test]
+    fn the_bell_rings_seven_short_of_the_margin() {
+        let mut a = noisy();
+        typed(&mut a, &"x".repeat(wrap::TEXT_COLS - 8));
+        assert!(!a.take_sounds().contains(&Sound::Bell));
+        typed(&mut a, "x");
+        assert_eq!(a.take_sounds(), vec![Sound::Key, Sound::Bell]);
+        typed(&mut a, "x");
+        assert_eq!(a.take_sounds(), vec![Sound::Key], "once per line");
+    }
+
+    #[test]
+    fn a_paste_is_not_typed() {
+        let mut a = noisy();
+        a.apply(Command::Insert("a whole paragraph".to_string()), 0);
+        assert!(a.take_sounds().is_empty());
+    }
+
+    #[test]
+    fn typing_into_a_dialog_is_silent() {
+        let mut a = noisy();
+        a.open_field(Purpose::Retrieve, "Retrieve Document", "Filename:", "");
+        typed(&mut a, "abc");
+        assert!(a.take_sounds().is_empty());
+    }
+
+    #[test]
+    fn turning_sounds_off_drops_what_was_waiting() {
+        let mut a = noisy();
+        typed(&mut a, "ab");
+        a.apply(Command::ToggleSounds, 0);
+        assert!(!a.sounds_on());
+        assert!(a.take_sounds().is_empty());
     }
 }

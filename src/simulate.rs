@@ -248,7 +248,7 @@ fn simulate_menu() {
         }),
         ("field", |a: &mut App| {
             a.open_field(
-                Purpose::CreateAtLaunch,
+                Purpose::Retrieve,
                 "New Document",
                 "Document to be created:",
                 "chapter-one.txt",

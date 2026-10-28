@@ -35,6 +35,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/lonetypist"
 cp target/lonetypist.icns "$APP/Contents/Resources/lonetypist.icns"
+# Bitstream's licence asks that its notice travel with the font.
+cp assets/fonts/COURIER10-COPYING "$APP/Contents/Resources/COURIER10-COPYING"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

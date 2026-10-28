@@ -21,6 +21,9 @@ pub const TEXT_TOP: usize = 1;
 pub struct VisualLine {
     pub start: usize,
     pub end: usize,
+    /// Columns in from the text margin. Prose never indents; a
+    /// screenplay indents every element to its place on the page.
+    pub indent: usize,
 }
 
 impl VisualLine {
@@ -40,7 +43,6 @@ impl VisualLine {
 /// space is consumed rather than starting the next line. A word longer
 /// than `width` is broken hard at the limit.
 pub fn wrap(text: &[char], width: usize) -> Vec<VisualLine> {
-    let width = width.max(1);
     let mut lines = Vec::new();
     let mut start = 0usize;
 
@@ -51,41 +53,7 @@ pub fn wrap(text: &[char], width: usize) -> Vec<VisualLine> {
             .map(|i| start + i)
             .unwrap_or(text.len());
 
-        let mut cursor = start;
-        loop {
-            if para_end - cursor <= width {
-                lines.push(VisualLine {
-                    start: cursor,
-                    end: para_end,
-                });
-                break;
-            }
-            let limit = cursor + width;
-            // Search through `limit` inclusive: if the first `width`
-            // characters fit exactly and a space follows, that space is
-            // the break point. `limit < para_end` here, so this is safe.
-            let break_at = text[cursor..=limit]
-                .iter()
-                .rposition(|&c| c == ' ')
-                .map(|i| cursor + i);
-
-            match break_at {
-                Some(sp) => {
-                    lines.push(VisualLine {
-                        start: cursor,
-                        end: sp,
-                    });
-                    cursor = sp + 1; // consume the space
-                }
-                None => {
-                    lines.push(VisualLine {
-                        start: cursor,
-                        end: limit,
-                    });
-                    cursor = limit;
-                }
-            }
-        }
+        wrap_paragraph(text, start, para_end, width, &mut lines);
 
         if para_end >= text.len() {
             break;
@@ -94,6 +62,56 @@ pub fn wrap(text: &[char], width: usize) -> Vec<VisualLine> {
     }
 
     lines
+}
+
+/// Wrap the single paragraph `text[start..end]`, which holds no newline,
+/// appending its lines to `out`. An empty paragraph is one empty line.
+pub fn wrap_paragraph(
+    text: &[char],
+    start: usize,
+    end: usize,
+    width: usize,
+    out: &mut Vec<VisualLine>,
+) {
+    let width = width.max(1);
+    let mut cursor = start;
+    loop {
+        if end - cursor <= width {
+            out.push(VisualLine {
+                start: cursor,
+                end,
+                indent: 0,
+            });
+            return;
+        }
+        let limit = cursor + width;
+        // Search through `limit` inclusive: if the first `width`
+        // characters fit exactly and a space follows, that space is
+        // the break point. `limit < end` here, so this is safe.
+        let break_at = text[cursor..=limit]
+            .iter()
+            .rposition(|&c| c == ' ')
+            .map(|i| cursor + i);
+
+        match break_at {
+            Some(sp) => {
+                out.push(VisualLine {
+                    start: cursor,
+                    end: sp,
+                    indent: 0,
+                });
+                cursor = sp + 1; // consume the space
+            }
+            None => {
+                out.push(VisualLine {
+                    start: cursor,
+                    end: limit,
+                    indent: 0,
+                });
+                cursor = limit;
+            }
+        }
+    }
 }
 
 /// The visual (line, column) of a character offset.
@@ -142,7 +160,14 @@ mod tests {
 
     #[test]
     fn empty_text_is_one_empty_line() {
-        assert_eq!(wrap(&[], 10), vec![VisualLine { start: 0, end: 0 }]);
+        assert_eq!(
+            wrap(&[], 10),
+            vec![VisualLine {
+                start: 0,
+                end: 0,
+                indent: 0
+            }]
+        );
     }
 
     #[test]

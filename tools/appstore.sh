@@ -117,6 +117,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/universal/lonetypist "$APP/Contents/MacOS/lonetypist"
 cp target/lonetypist.icns "$APP/Contents/Resources/lonetypist.icns"
+# Bitstream's licence asks that its notice travel with the font.
+cp assets/fonts/COURIER10-COPYING "$APP/Contents/Resources/COURIER10-COPYING"
 cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
 
 xcrun actool "$CATALOG" --compile "$APP/Contents/Resources" --app-icon AppIcon \

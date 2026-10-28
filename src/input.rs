@@ -8,11 +8,12 @@ pub const MAX_LEN: usize = 120;
 /// What the caller intends to do with the value once it is entered.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Purpose {
-    CreateAtLaunch,
-    SaveAs,
+    /// Shift-F10: open a document by typing its name.
     Retrieve,
     /// Where to write the print job instead of sending it to a printer.
     PrintToFile,
+    /// One field of a multi-field form; never submitted on its own.
+    FormField,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,19 +113,54 @@ impl Input {
     }
 }
 
+/// Several labelled fields in one box, Tab between them. Used by the
+/// title page, whose keys travel with the fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Form {
+    pub fields: Vec<(String, Input)>,
+    pub focus: usize,
+}
+
+impl Form {
+    /// `fields` are (key, label, value).
+    pub fn new(fields: &[(&str, &str, String)]) -> Self {
+        let fields = fields
+            .iter()
+            .map(|(key, label, value)| {
+                let mut input = Input::new(Purpose::FormField, "", label);
+                input.set_value(value);
+                (key.to_string(), input)
+            })
+            .collect();
+        Self { fields, focus: 0 }
+    }
+
+    pub fn focused(&mut self) -> &mut Input {
+        &mut self.fields[self.focus].1
+    }
+
+    pub fn next(&mut self) {
+        self.focus = (self.focus + 1) % self.fields.len();
+    }
+
+    pub fn prev(&mut self) {
+        self.focus = (self.focus + self.fields.len() - 1) % self.fields.len();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn field(text: &str) -> Input {
-        let mut i = Input::new(Purpose::SaveAs, "Save Document", "Filename:");
+        let mut i = Input::new(Purpose::Retrieve, "Save Document", "Filename:");
         i.set_value(text);
         i
     }
 
     #[test]
     fn a_new_field_is_empty_with_the_cursor_at_the_start() {
-        let i = Input::new(Purpose::CreateAtLaunch, "New", "Document:");
+        let i = Input::new(Purpose::Retrieve, "New", "Document:");
         assert_eq!(i.value(), "");
         assert_eq!(i.cursor(), 0);
     }
@@ -238,7 +274,7 @@ mod tests {
     #[test]
     fn it_remembers_what_it_is_for() {
         let i = field("a");
-        assert_eq!(i.purpose(), Purpose::SaveAs);
+        assert_eq!(i.purpose(), Purpose::Retrieve);
         assert_eq!(i.title(), "Save Document");
         assert_eq!(i.label(), "Filename:");
     }

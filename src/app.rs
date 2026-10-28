@@ -266,11 +266,7 @@ impl App {
         if !self.sounds_on || typed.chars().count() != 1 {
             return;
         }
-        self.sound(if typed == " " {
-            Sound::Space
-        } else {
-            Sound::Key
-        });
+        self.sound(Sound::Key);
         let (line, col) = self.cursor_position();
         let width = if self.screenplay {
             let kind = self.layout.kinds.get(line).copied();
@@ -3477,12 +3473,13 @@ mod sound_tests {
     }
 
     #[test]
-    fn keys_space_and_return_each_have_their_sound() {
+    fn keys_and_return_each_have_their_sound() {
         let mut a = noisy();
         typed(&mut a, "a b\n");
         assert_eq!(
             a.take_sounds(),
-            vec![Sound::Key, Sound::Space, Sound::Key, Sound::Return]
+            vec![Sound::Key, Sound::Key, Sound::Key, Sound::Return],
+            "the space bar strikes like any key"
         );
         assert!(a.take_sounds().is_empty(), "taken once");
         a.apply(Command::Backspace, 0);

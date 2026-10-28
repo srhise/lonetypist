@@ -4,8 +4,8 @@
 //! Every key gets one of eight strikes cut from real typing, played a
 //! touch faster or slower and louder or softer than the last, so a run
 //! of the same letter never sounds like a sample repeating. The space
-//! bar, the carriage return and the margin bell are their own
-//! recordings.
+//! bar strikes like any other key; the carriage return and the margin
+//! bell are their own recordings.
 //!
 //! Playback is a small mixer in the audio callback: strikes overlap the
 //! way they do when you type fast. The output stream only exists while
@@ -18,8 +18,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Sound {
+    /// Any key, the space bar included.
     Key,
-    Space,
     Return,
     /// The bell a few characters before the right margin.
     Bell,
@@ -35,7 +35,6 @@ const KEYS: [&[u8]; 8] = [
     include_bytes!("../assets/sounds/key-7.wav"),
     include_bytes!("../assets/sounds/key-8.wav"),
 ];
-const SPACE: &[u8] = include_bytes!("../assets/sounds/space.wav");
 const RETURN: &[u8] = include_bytes!("../assets/sounds/return.wav");
 const BELL: &[u8] = include_bytes!("../assets/sounds/bell.wav");
 
@@ -131,7 +130,6 @@ pub struct Player {
     tx: Sender<Voice>,
     device_rate: f32,
     keys: Vec<Clip>,
-    space: Clip,
     ret: Clip,
     bell: Clip,
     /// Which key strike played last, and a counter for the variation.
@@ -174,7 +172,6 @@ impl Player {
             tx,
             device_rate,
             keys: KEYS.iter().map(|w| Clip::new(w)).collect(),
-            space: Clip::new(SPACE),
             ret: Clip::new(RETURN),
             bell: Clip::new(BELL),
             last_key: 0,
@@ -198,8 +195,6 @@ impl Player {
                 self.last_key = i;
                 (&self.keys[i], 1.0 + a * 0.035, 0.9 + b * 0.12)
             }
-            // The bar is a dull thump under the strikes, not one of them.
-            Sound::Space => (&self.space, 0.94 + a * 0.02, 0.6),
             Sound::Return => (&self.ret, 1.0, 0.8),
             Sound::Bell => (&self.bell, 1.0, 0.5),
         };
@@ -226,7 +221,7 @@ mod tests {
 
     #[test]
     fn every_recording_decodes() {
-        for wav in KEYS.iter().chain([SPACE, RETURN, BELL].iter()) {
+        for wav in KEYS.iter().chain([RETURN, BELL].iter()) {
             let (rate, samples) = decode(wav);
             assert_eq!(rate, 48_000);
             assert!(samples.len() > 1_000);

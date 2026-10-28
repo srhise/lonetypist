@@ -16,7 +16,6 @@ CC0 asks for nothing; the credit here is a courtesy.
 | `key-6.wav` | #2841 Typewriter #8 | the strike at 17.739s |
 | `key-7.wav` | #2841 Typewriter #8 | the strike at 34.758s |
 | `key-8.wav` | #1065 Typewriter #1 | the strike at 7.096s |
-| `space.wav` | #2843 Typewriter, space | the press only, 0.100-0.198s, high-passed at 150Hz to lose the rumble |
 | `return.wav` | #2840 Typewriter #7 | 29.40-29.95s: lever, carriage, stop |
 | `bell.wav` | #2844 Typewriter, Bell #1 | 0.065-1.6s |
 

@@ -225,8 +225,8 @@ DOS look, modern muscle memory.
 **Typewriter sounds** (`F9`, View > Typewriter Sounds) are off until
 you ask. They are a Hermes Precisa 305: eight different key strikes,
 played a little faster or slower and louder or softer each time so no
-two in a row match, the space bar, the carriage return on `Enter`, and
-the bell seven characters short of the margin. The audio device is only
+two in a row match (the space bar included), the carriage return on
+`Enter`, and the bell seven characters short of the margin. The audio device is only
 opened while they are on.
 
 The mouse places the caret, drags to select, and scrolls. There is no

@@ -3415,6 +3415,92 @@ Concrete. Fluorescent hum.\n\
         a.screen().render(&mut fb);
         crate::vga::preview::write_bmp("target/screenplay-preview.bmp", &fb);
     }
+
+    /// The screens behind the App Store set, as `target/store-<name>.bmp`
+    /// for `tools/make-shots.py`: `cargo test dump_store_set -- --ignored`.
+    #[test]
+    #[ignore]
+    fn dump_store_set() {
+        use crate::vga::{FB_HEIGHT, FB_WIDTH};
+        let source = std::fs::read_to_string("tools/store.fountain").expect("sample");
+        let prose = "The lamp was the only light left on Alder Street, and \
+Ada had been at the machine since before it came on. Somewhere below her a \
+radiator knocked twice and gave up.\n\nShe fed in a fresh sheet, squared it \
+against the bail, and typed the first line of the letter she had spent eleven \
+years not writing.\n\nDear June, it began. Then nothing. Then everything at once: \
+the summer of the flood, the borrowed car, the night on the pier when neither of \
+them said the thing they had driven four hundred miles to say.\n\nThe keys \
+kept time with the rain. She did not stop to read it back. That was the rule, \
+the only one she had ever kept: forward, one line at a time, until";
+
+        let dump = |name: &str, a: &mut App| {
+            a.paint_at(0);
+            let mut fb = vec![0u8; FB_WIDTH * FB_HEIGHT * 4];
+            a.screen().render(&mut fb);
+            crate::vga::preview::write_bmp(&format!("target/store-{name}.bmp"), &fb);
+            println!("wrote target/store-{name}.bmp");
+        };
+        // A screenplay with the caret in the car scene.
+        let screenplay = |upto: &str| {
+            let mut a = App::new();
+            a.set_path(
+                std::path::PathBuf::from("/Users/dana/Documents/night-shift.fountain"),
+                false,
+            );
+            a.set_screenplay(true);
+            let end = source.find(upto).expect("marker") + upto.len();
+            a.load_text(&source[..end]);
+            a.editor.set_cursor(end, false);
+            a.paint_at(0);
+            a.follow_caret();
+            a
+        };
+        let prose_app = || {
+            let mut a = App::new();
+            a.set_path(
+                std::path::PathBuf::from("/Users/dana/Documents/letters.txt"),
+                false,
+            );
+            a.load_text(prose);
+            a.editor.set_cursor(prose.len(), false);
+            a
+        };
+
+        // Mid-scene, about to name a speaker the script already knows.
+        let mut a = screenplay("The radio gave me the address.\n\n");
+        typed(&mut a, "\tma");
+        dump("script", &mut a);
+
+        let mut a = screenplay("I unplugged these in 1994.\n");
+        for ribbon in [Ribbon::Fresh, Ribbon::Worn, Ribbon::Clean] {
+            a.ribbon = ribbon;
+            let pdf = a.script_pdf(Scope::Full).expect("pdf");
+            let name = ribbon.name().to_lowercase();
+            std::fs::write(format!("target/store-{name}.pdf"), pdf).expect("write");
+        }
+        a.ribbon = Ribbon::Fresh;
+        a.apply(Command::SceneList, 0);
+        dump("scenes", &mut a);
+
+        let mut a = screenplay("faded ribbon ink: her name, her street, tonight's date.\n");
+        a.apply(Command::TitlePage, 0);
+        dump("title", &mut a);
+
+        let mut a = screenplay("faded ribbon ink: her name, her street, tonight's date.\n");
+        a.open_print(Some("LaserWriter".to_string()));
+        dump("print", &mut a);
+
+        let mut a = prose_app();
+        dump("prose", &mut a);
+
+        let mut a = prose_app();
+        a.open_file_menu();
+        dump("menu", &mut a);
+
+        let mut a = prose_app();
+        a.apply(Command::ToggleStatusLine, 0);
+        dump("bare", &mut a);
+    }
 }
 
 #[cfg(test)]
